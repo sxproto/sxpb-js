@@ -38,7 +38,6 @@ describe('SxPB Parser', () => {
   });
 
   it('parses array of messages', () => {
-      const input = `(users (()) ((name "a")) ((name "b")))`;
       // Note: `((name "a"))` is `( () (name "a") )` -- unnamed message field
       // Wait, unnamed message field is `( () message_body )`.
       // `message_body` is `(name "a")`.
@@ -58,6 +57,7 @@ describe('SxPB Parser', () => {
   it('parses manyof field', () => {
       // (name (()) (k1 v1) (k2 v2))
       const input = `(properties (()) (k1 "v1") (k2 "v2"))`;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const result = loads(input) as any;
       expect(result.properties).toBeInstanceOf(SxpbMany);
       expect(result.properties.value).toHaveLength(2);
@@ -68,6 +68,7 @@ describe('SxPB Parser', () => {
   it('parses loneof field', () => {
       // ((key subkey) value)
       const input = `((config debug) +true)`;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const result = loads(input) as any;
       expect(result.config).toBeInstanceOf(SxpbLone);
       expect(result.config.value).toEqual({debug: true});
