@@ -13,6 +13,8 @@
    npm install
    ```
 
+   *Note: This command generates the `package-lock.json` file. This file is ignored by git and should not be committed.*
+
 ## Building
 
 To build the project (compile TypeScript to JavaScript):
