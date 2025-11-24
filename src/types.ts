@@ -5,14 +5,14 @@ export interface SxpbDict {
 export type SxpbValue = string | number | boolean | SxpbDict | SxpbList | SxpbLone | SxpbMany;
 
 export class SxpbList extends Array<SxpbValue> {
-    constructor(items: SxpbValue[] = []) {
-        super(...items);
-        Object.setPrototypeOf(this, SxpbList.prototype);
-    }
+  constructor(items: SxpbValue[] = []) {
+    super(...items);
+    Object.setPrototypeOf(this, SxpbList.prototype);
+  }
 
-    toList() {
-        return Array.from(this);
-    }
+  toList() {
+    return Array.from(this);
+  }
 }
 
 export class SxpbLone {
@@ -24,9 +24,9 @@ export class SxpbLone {
 }
 
 export class SxpbMany {
-    constructor(public value: SxpbValue[] = []) {}
+  constructor(public value: SxpbValue[] = []) {}
 
-    toList() {
-        return this.value;
-    }
+  toList() {
+    return this.value;
+  }
 }
