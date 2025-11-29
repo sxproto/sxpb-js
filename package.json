@@ -1,0 +1,44 @@
+{
+  "name": "@sxproto/sxpb",
+  "version": "0.0.1",
+  "description": "A TypeScript library to read and write SxPB content.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsc",
+    "lint": "eslint .",
+    "tidy": "eslint . --fix",
+    "prepare": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sxproto/sxpb-js.git"
+  },
+  "keywords": [
+    "sxpb",
+    "parser",
+    "serializer"
+  ],
+  "author": "SxPB Contributors",
+  "license": "0BSD",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/sxproto/sxpb-js/issues"
+  },
+  "homepage": "https://github.com/sxproto/sxpb-js#readme",
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@stylistic/eslint-plugin": "^5.6.1",
+    "@types/node": "^22.10.10",
+    "eslint": "^9.39.1",
+    "globals": "^16.5.0",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.47.0",
+    "vitest": "^3.0.4"
+  }
+}
