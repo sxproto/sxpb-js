@@ -113,41 +113,105 @@ function serializeListBody(lst: SxPB.Value[], indent: number, level: number): st
   return indent > 0 ? items.join("\n") : items.join(" ");
 }
 
+function formatNestAtom(s: string, wrapInParens: boolean): string {
+  // If string contains spaces or special characters that would require quotes,
+  // we prefer `"" ...` (anonymous discriminated string) format if possible.
+
+  if (!s) return '""'; // Empty string -> ""
+
+  // Check if string needs quotes or special handling
+  if (isPlainString(s) && hasBarePrefix(s)) {
+    return s;
+  }
+
+  if (s.includes(" ") && !/[\t\n\v\f\r]/.test(s) && !s.includes("  ")) {
+    const parts = s.split(" ");
+    const serializedParts = parts.map(formatAtom);
+    const body = `"" ${serializedParts.join(" ")}`;
+    return wrapInParens ? `(${body})` : body;
+  }
+
+  return formatAtom(s);
+}
+
+function serializeNestBody(nest: SxPB.Nest, indent: number, level: number): string {
+  const list = nestToList(nest, true);
+
+  const items: string[] = [];
+  const pad = indent > 0 ? " ".repeat(indent * level) : "";
+
+  for (const item of list) {
+    if ((item as any)._isNestMarker) {
+      items.push('("")');
+    } else if (typeof item === "string") {
+      // Top level nest items (keys) should be wrapped in parens if they are anonymous discriminated strings
+      // to avoid being parsed as multiple items.
+      items.push(formatNestAtom(item, true));
+    } else if (Array.isArray(item) || item instanceof SxPB.List) {
+      const innerBody = serializeNestListInternal(item as SxPB.Value[], indent, level + 1);
+      items.push(`(${innerBody})`);
+    }
+  }
+
+  if (indent > 0) {
+    // Heuristic: items > 4 or contains sub-list -> multiline
+    // items[0] is `("")`.
+    const hasSubList = items.some((item, index) => index > 0 && item.startsWith("("));
+
+    if (items.length > 4 || hasSubList) {
+      // Multiline
+      if (items[0] === '("")') {
+        const rest = items.slice(1);
+        const restStr = rest.map(s => `${pad}${s}`).join("\n");
+        return `("")\n${restStr}`;
+      }
+      const restStr = items.map(s => `${pad}${s}`).join("\n");
+      return restStr;
+    } else {
+      // Inline
+      return items.join(" ");
+    }
+  }
+
+  return items.join(" ");
+}
+
+function serializeNestListInternal(lst: SxPB.Value[], indent: number, level: number): string {
+  const items: string[] = [];
+  for (let i = 0; i < lst.length; i++) {
+    const item = lst[i];
+    if (typeof item === "string") {
+      if (i === 0) {
+        items.push(formatAtom(item));
+      } else {
+        items.push(formatNestAtom(item, false));
+      }
+    } else if ((item as any)._isNestMarker) {
+      items.push('("")');
+    } else if (Array.isArray(item) || item instanceof SxPB.List) {
+      const innerBody = serializeNestListInternal(item as SxPB.Value[], indent, level + 1);
+      items.push(`(${innerBody})`);
+    }
+  }
+  return items.join(" ");
+}
+
 
 function serializeField(key: string, value: SxPB.Value, indent: number, level: number): string {
   const pad = indent > 0 ? " ".repeat(indent * level) : "";
 
   if (value instanceof SxPB.Many) {
     // manyof_field
-    // We need to support variants.
-    // If items are Lone with specific structure, we might choose variant.
-    // Default to `(key (()) items...)` variant 1 as it is most generic?
-
-    // Check if items are "simple" to decide variant?
-    // Python implementation of `manyof_field` transformer creates `SxpbMany` of `SxpbLone`.
-    // It seems `manyof_body` always uses `(())`.
-    // `manyof_field` variant 2: `((name) items...)`.
-    // Let's use `(key (()) items...)` for consistency with Python if possible.
-
     const items = value.value as SxPB.Lone[];
     if (items.length === 0) {
       return `${pad}((${key}))`;
     }
 
     const parts = items.map(lone => {
-      // each lone is {subkey: val} or {value: val} (if scalar atom)
       const k = Object.keys(lone.value)[0];
       const v = lone.value[k];
 
       if (k === "value" && Object.keys(lone.value).length === 1) {
-        // It was a scalar item in manyof_field variant 2?
-        // Or it is just a field named "value"?
-        // Ambiguity.
-        // If we want to support `((key) item item)`, items are scalars.
-        // But `SxpbMany` stores `SxpbLone`.
-        // If `SxpbLone` has key "value", it might be a trick.
-
-        // Let's just serialize as fields: `(key val)`.
         return serializeField(k, v, indent, level + 1);
       }
       return serializeField(k, v, indent, level + 1);
@@ -166,10 +230,8 @@ function serializeField(key: string, value: SxPB.Value, indent: number, level: n
   }
 
   if (value instanceof SxPB.Lone) {
-    // loneof_field `((key subkey) value)`
     const [subkey, loneValue] = Object.entries(value.value)[0];
     if (typeof loneValue === "object" && loneValue !== null && !Array.isArray(loneValue) && !(loneValue instanceof SxPB.Many) && !(loneValue instanceof SxPB.Lone)) {
-      // Nested message
       const body = serializeMessageBody(loneValue as SxPB.Dict, indent, level + 1);
       if (indent > 0) {
         return body
@@ -186,6 +248,19 @@ function serializeField(key: string, value: SxPB.Value, indent: number, level: n
       const keyPart = indent === 0 ? `(${key} ${subkey})` : `(${joinCondensed([key, subkey])})`;
       return `((${joinCondensed([keyPart, atom])}))`;
     }
+  }
+
+  if (value instanceof SxPB.Nest) {
+    const body = serializeNestBody(value, indent, level + 1);
+    // Nest body includes `("")` if present.
+    // We wrap: `(${key} ${body})`.
+
+    // If the nest body is multiline, format with the key on the first line and the body following.
+    if (indent > 0 && body.includes("\n")) {
+      return `${pad}(${key} ${body}\n${pad})`;
+    }
+
+    return `${pad}(${key} ${body})`;
   }
 
   if (value && typeof value === "object" && !Array.isArray(value) && !(value instanceof SxPB.Many)) {
@@ -218,8 +293,14 @@ function serializeField(key: string, value: SxPB.Value, indent: number, level: n
 }
 
 export function stringify(obj: SxPB.Value, indent: number = 1): string {
-  if (obj && typeof obj === "object" && !Array.isArray(obj) && !(obj instanceof SxPB.Lone) && !(obj instanceof SxPB.Many)) {
+  if (obj && typeof obj === "object" && !Array.isArray(obj) && !(obj instanceof SxPB.Lone) && !(obj instanceof SxPB.Many) && !(obj instanceof SxPB.Nest)) {
     return serializeMessageBody(obj as SxPB.Dict, indent, 0);
+  }
+
+  if (obj instanceof SxPB.Nest) {
+    const body = serializeNestBody(obj, indent, 0);
+    // Top level nest
+    return body; // Already contains `("")` and formatting
   }
 
   if (Array.isArray(obj) || obj instanceof SxPB.Many) {
@@ -227,22 +308,14 @@ export function stringify(obj: SxPB.Value, indent: number = 1): string {
     const items = Array.isArray(obj) ? obj : obj.value;
     if (items.length === 0) return "(())";
 
-    // Top level is list of messages (usually) or manyof fields.
-    // Grammar start: message_body | array_body | manyof_body.
-    // If we pass an Array, we treat it as an array_body, which requires `(())` header.
-
     if (Array.isArray(obj)) {
       const body = serializeListBody(obj, indent, 0);
-      // Prepend `(())` for valid `array_body`.
       if (indent > 0) return `(())\n${body}`;
       if (indent === 0) return `(()) ${body}`;
       return `(())${body}`;
     }
 
     if (obj instanceof SxPB.Many) {
-      // manyof_body
-      // similar to array_body but with fields.
-      // Reuse serializeField logic for items?
       const parts = (obj.value as SxPB.Lone[]).map(lone => {
         const k = Object.keys(lone.value)[0];
         const v = lone.value[k];
@@ -261,4 +334,25 @@ export function stringify(obj: SxPB.Value, indent: number = 1): string {
   }
 
   throw new Error("Top-level object must be a message/dict or a list/array");
+}
+
+function nestToList(nest: SxPB.Nest, includeMarker: boolean): SxPB.Value[] {
+  const items: SxPB.Value[] = [];
+  if (includeMarker) {
+    items.push({ _isNestMarker: true } as any);
+  }
+
+  for (const k in nest.value) {
+    const v = nest.value[k];
+    if (v === null) {
+      items.push(k);
+    } else {
+      // v is SxpbNest
+      // Flatten into [k, ...v_entries]
+      // Note: recursively call nestToList WITHOUT marker for the sub-list
+      const subItems = nestToList(v, false);
+      items.push(new SxPB.List([k, ...subItems]));
+    }
+  }
+  return items;
 }

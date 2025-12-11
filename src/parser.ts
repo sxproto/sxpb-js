@@ -242,16 +242,24 @@ export class Parser {
   }
 
   public parse(): SxPB.Value {
-    if (this.match(TokenType.LPAREN) &&
+    if ((this.match(TokenType.LPAREN) &&
             this.peek(1).type === TokenType.LPAREN &&
             this.peek(2).type === TokenType.RPAREN &&
-            this.peek(3).type === TokenType.RPAREN) {
+            this.peek(3).type === TokenType.RPAREN) ||
+        this.isNestHeader()) {
 
       return this.parseArrayBodyOrManyOfBody();
 
     } else {
       return this.parseMessageBody();
     }
+  }
+
+  private isNestHeader(): boolean {
+    return this.match(TokenType.LPAREN) &&
+           this.peek(1).type === TokenType.STRING &&
+           this.peek(1).value === "" &&
+           this.peek(2).type === TokenType.RPAREN;
   }
 
   private isNextTokenAnArrayBodyItem(): boolean {
@@ -295,10 +303,14 @@ export class Parser {
     return false;
   }
 
-  private parseArrayBodyOrManyOfBody(): SxPB.List | SxPB.Many {
+  private parseArrayBodyOrManyOfBody(): SxPB.List | SxPB.Many | SxPB.Nest {
     if (this.peek(4).type === TokenType.EOF) {
       this.consumeHeader();
       return new SxPB.List([]);
+    }
+
+    if (this.isNestHeader()) {
+      return this.parseArrayBody();
     }
 
     if (this.isNextTokenAnArrayBodyItem()) {
@@ -488,11 +500,12 @@ export class Parser {
   }
 
   private parseValue(): SxPB.Value {
-    if (this.match(TokenType.LPAREN) &&
+    if ((this.match(TokenType.LPAREN) &&
             this.peek(1).type === TokenType.LPAREN &&
             this.peek(2).type === TokenType.RPAREN &&
-            this.peek(3).type === TokenType.RPAREN) {
-      // It's `(())`
+            this.peek(3).type === TokenType.RPAREN) ||
+        this.isNestHeader()) {
+      // It's `(())` or `("")`
       return this.parseArrayBodyOrManyOfBody();
     }
 
@@ -517,27 +530,67 @@ export class Parser {
     return new SxPB.Many(items);
   }
 
-  private parseArrayBody(): SxPB.List {
-    this.consumeHeader();
+  private parseGenericList(): SxPB.List {
+    this.consume(TokenType.LPAREN);
+    const items: SxPB.Value[] = [];
+    while(!this.match(TokenType.RPAREN) && !this.match(TokenType.EOF)) {
+      const t = this.peek();
+      if (t.type === TokenType.LPAREN) {
+        items.push(this.parseGenericList());
+      } else if (t.type === TokenType.STRING && t.value === "") {
+        // Anonymous discriminated string inside generic list?
+        // e.g. `("" a b)`
+        this.consume(); // Consume ""
+        items.push(this.parseAnonymousDiscriminatedStringBody());
+      } else if (t.type === TokenType.STRING || t.type === TokenType.BARE || t.type === TokenType.NUMBER || t.type === TokenType.BOOLEAN) {
+        // Scalar atom
+        const atomToken = this.consume();
+        if (atomToken.type === TokenType.BOOLEAN) {
+          items.push(atomToken.value ? "+true" : "+false");
+        } else {
+          items.push(String(atomToken.value));
+        }
+      } else {
+        throw new Error(`Unexpected token in generic list: ${TokenType[t.type]}`);
+      }
+    }
+    this.consume(TokenType.RPAREN);
+    return new SxPB.List(items);
+  }
+
+  private parseArrayBody(): SxPB.List | SxPB.Nest {
+    if (this.match(TokenType.LPAREN) &&
+        this.peek(1).type === TokenType.LPAREN &&
+        this.peek(2).type === TokenType.RPAREN &&
+        this.peek(3).type === TokenType.RPAREN) {
+      this.consumeHeader();
+    }
+
     let items: SxPB.Value[] = [];
+    let isNest = false;
 
     // Parse items individually
     while(!this.match(TokenType.RPAREN) && !this.match(TokenType.EOF)) {
       const t = this.peek();
+      let item: SxPB.Value | undefined;
+      let fromDiscriminatedEmptyString = false;
 
-      if (t.type === TokenType.NUMBER) {
-        items.push(this.consume().value);
-      } else if (t.type === TokenType.BOOLEAN) {
-        items.push(this.consume().value);
-      } else if (t.type === TokenType.STRING || t.type === TokenType.BARE) {
-        items.push(String(this.consume().value));
-      } else if (t.type === TokenType.LPAREN) {
+      // Special handling for Nest items: they can be generic lists `( ... )`.
+      // But standard array body items must be `(() ...)` or `()`.
+      // If we are in a Nest (`isNest` is true), we allow generic lists.
+      // `isNest` is set AFTER detecting `("")` (which happens in the loop for first item).
+      //
+      // Also, detecting `("")` happens via `LPAREN, STRING(""), ...`.
+
+      if (t.type === TokenType.LPAREN) {
         // Could be empty message `()` or anonymous discriminated message `(() ...)` or `anonymous discriminated string` `("" ...)`
+        // OR generic list if isNest is true.
+
         if (this.peek(1).type === TokenType.RPAREN) {
           // `()` -> empty message
           this.consume(TokenType.LPAREN);
           this.consume(TokenType.RPAREN);
-          items.push({});
+          item = {};
         } else if (this.peek(1).type === TokenType.STRING && this.peek(1).value === "") {
           // `("" ...)` -> anonymous discriminated string
           // Structure: LPAREN, STRING(""), (ESCAPED_STRING | MULTILINE_STRING | PLAIN)+, RPAREN
@@ -548,7 +601,11 @@ export class Parser {
           const strBody = this.parseAnonymousDiscriminatedStringBody();
 
           this.consume(TokenType.RPAREN);
-          items.push(strBody);
+          item = strBody;
+
+          if (strBody === "") {
+            fromDiscriminatedEmptyString = true;
+          }
         } else if (this.peek(1).type === TokenType.LPAREN && this.peek(2).type === TokenType.RPAREN) {
           // `(() ...)` -> anonymous discriminated message
           this.consume(TokenType.LPAREN);
@@ -556,13 +613,41 @@ export class Parser {
           this.consume(TokenType.RPAREN); // )
           const msg = this.parseMessageBody();
           this.consume(TokenType.RPAREN); // closing )
-          items.push(msg);
+          item = msg;
         } else {
-          throw new Error("Invalid array body item. Unexpected '(' sequence.");
+          // Unexpected sequence for standard array body.
+          // BUT valid for Nest generic list?
+          if (isNest) {
+            // Treat as generic list
+            item = this.parseGenericList();
+          } else {
+            throw new Error("Invalid array body item. Unexpected '(' sequence.");
+          }
         }
+      } else if (t.type === TokenType.NUMBER) {
+        item = this.consume().value;
+      } else if (t.type === TokenType.BOOLEAN) {
+        item = this.consume().value;
+      } else if (t.type === TokenType.STRING || t.type === TokenType.BARE) {
+        item = String(this.consume().value);
       } else {
         throw new Error(`Invalid array body item type: ${TokenType[t.type]}`);
       }
+
+      // Check for Nest marker
+      if (items.length === 0 && fromDiscriminatedEmptyString) {
+        isNest = true;
+        // Do NOT add the marker to items
+        continue;
+      }
+
+      if (item !== undefined) {
+        items.push(item);
+      }
+    }
+
+    if (isNest) {
+      return this.listToNest(items);
     }
 
     // Post-processing to enforce homogeneity and string conversion
@@ -571,7 +656,8 @@ export class Parser {
     // 2. If all are Number -> ok.
     // 3. If all are Boolean -> ok.
     // 4. If all are Message (Objects) -> ok.
-    // Mixed Message and Scalar is invalid (grammar separates them), but we can just leave it or fail.
+    // Mixed Message and Scalar is invalid (grammar separates them).
+    // The parser is lenient here and allows them to coexist.
 
     // Check if we have any strings
     const hasString = items.some(i => typeof i === "string");
@@ -587,9 +673,46 @@ export class Parser {
 
     return new SxPB.List(items);
   }
+
+  private listToNest(items: SxPB.Value[]): SxPB.Nest {
+    const nestData: { [key: string]: SxPB.Nest | null } = {};
+
+    for (const item of items) {
+      if (typeof item === "string") {
+        nestData[item] = null;
+      } else if (item instanceof SxPB.List || Array.isArray(item)) {
+        // [Key, ...SubItems]
+        const arr = Array.isArray(item) ? item : (item as SxPB.List).toList();
+        if (arr.length > 0) {
+          const key = String(arr[0]); // Force key to string
+          const subItems = arr.slice(1);
+          nestData[key] = this.listToNest(subItems);
+        }
+      } else {
+        // Treat numbers and booleans as string keys.
+        if (typeof item === "number" || typeof item === "boolean") {
+          nestData[String(item)] = null;
+        }
+        // Ignore unexpected Dict/Message items in Nest list.
+        // Note: `()` is parsed as an empty Dict `{}` by parseArrayBody, so it falls here and is ignored.
+      }
+    }
+
+    return new SxPB.Nest(nestData);
+  }
 }
 
 function unwrap(value: SxPB.Value): SxPB.Value {
+  if (value instanceof SxPB.Nest) {
+    // Keep Nest as SxPB.Nest to preserve semantics (recursive dict with nulls vs sub-dicts),
+    // but unwrap its children recursively.
+    const newNestData: { [key: string]: SxPB.Nest | null } = {};
+    for (const k in value.value) {
+      const v = value.value[k];
+      newNestData[k] = v ? (unwrap(v) as SxPB.Nest) : null;
+    }
+    return new SxPB.Nest(newNestData);
+  }
   if (value instanceof SxPB.List) {
     return Array.from(value).map(unwrap);
   }

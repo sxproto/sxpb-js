@@ -2,7 +2,7 @@ export interface SxpbDict {
   [key: string]: SxpbValue;
 }
 
-export type SxpbValue = string | number | bigint | boolean | SxpbDict | SxpbList | SxpbLone | SxpbMany | SxpbValue[];
+export type SxpbValue = string | number | bigint | boolean | SxpbDict | SxpbList | SxpbLone | SxpbMany | SxpbNest | SxpbValue[];
 
 export class SxpbList extends Array<SxpbValue> {
   constructor(items?: number | SxpbValue[]) {
@@ -49,17 +49,23 @@ export class SxpbMany {
   }
 }
 
+export class SxpbNest {
+  constructor(public value: { [key: string]: SxpbNest | null } = {}) {}
+}
+
 export const SxPBTypes = {
   List: SxpbList,
   Lone: SxpbLone,
-  Many: SxpbMany
+  Many: SxpbMany,
+  Nest: SxpbNest
 } as const;
 
 // eslint-disable-next-line @typescript-eslint/no-namespace
 export namespace SxPBTypes {
+  export type Dict = SxpbDict;
   export type List = SxpbList;
   export type Lone = SxpbLone;
   export type Many = SxpbMany;
-  export type Dict = SxpbDict;
+  export type Nest = SxpbNest;
   export type Value = SxpbValue;
 }
