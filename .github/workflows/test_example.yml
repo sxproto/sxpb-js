@@ -1,0 +1,30 @@
+name: Test Example
+
+on: [push, pull_request]
+
+jobs:
+  test_example:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sxpb_example
+        uses: actions/checkout@v6
+        with:
+          repository: sxproto/sxpb_example
+
+      - uses: actions/setup-node@v6
+
+      - name: Update sxpb dependency
+        run: |
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            REPO="${{ github.event.pull_request.head.repo.full_name }}"
+            SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            REPO="${{ github.repository }}"
+            SHA="${{ github.sha }}"
+          fi
+
+          echo "Updating sxpb to ${REPO} @ ${SHA}"
+          npm install "github:${REPO}#${SHA}"
+
+      - run: npm install
+      - run: npm test
