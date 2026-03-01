@@ -2,6 +2,15 @@ import { SxPBTypes as SxPB } from "./types.js";
 
 // See https://grencez.dev/2024/sxpb-string-grammar-20240717/ for string grammar rules.
 
+export function canFormatAsAnonymousDiscriminatedString(s: string): boolean {
+  // Must contain spaces to be worth it.
+  // Must NOT contain characters that would require quoting the parts (e.g., quotes, parens, semicolons).
+  // Must NOT contain control characters (newlines, tabs, etc.).
+  // Must NOT start or end with spaces, nor contain double spaces.
+  // This strict regex ensures the string consists of two or more space-separated "plain words".
+  return /^[^ \t\n\v\f\r;"()]+(?: [^ \t\n\v\f\r;"()]+)+$/.test(s);
+}
+
 function isPlainString(s: string): boolean {
   if (!s) return false;
   return /^[^ \t\n\v\f\r;"()]+$/.test(s);
@@ -77,6 +86,52 @@ function serializeMessageBody(d: SxPB.Dict, indent: number, level: number): stri
   return joinCondensed(parts);
 }
 
+function isLikeNest(lst: any[]): boolean {
+  // Heuristic: A list is a nest if it contains a mix of strings and objects (Nest items),
+  // OR if it contains objects that look like Nest items (single key mapping to array).
+  if (lst.length === 0) return false;
+
+  let hasString = false;
+  let hasObject = false;
+  let hasScalar = false; // number, boolean
+
+  for (const item of lst) {
+    if (typeof item === "string") {
+      hasString = true;
+    } else if (typeof item === "object" && item !== null && !Array.isArray(item)) {
+      hasObject = true;
+      // Check if it looks like a Nest Item { key: Array }
+      const keys = Object.keys(item);
+      if (keys.length === 1 && Array.isArray(item[keys[0]])) {
+        // Definitely looks like a nest item
+      }
+    } else if (typeof item === "number" || typeof item === "boolean") {
+      hasScalar = true;
+    }
+  }
+
+  // Purely mixed string + object is definitely a nest (SxPB generic lists don't allow this).
+  if (hasString && hasObject) return true;
+
+  // List of objects where objects have array values?
+  // [{a: [...]}] -> could be nest.
+  if (hasObject && !hasString && !hasScalar) {
+    // If all objects have array values, treat as nest?
+    // Ambiguous with list of messages.
+    // However, list of messages usually has scalar values or sub-messages.
+    // If we see { key: Array }, it is likely a Nest structure (unwrapped).
+    const allArrayValues = lst.every(item => {
+      if (typeof item !== "object" || item === null || Array.isArray(item)) return false;
+      const keys = Object.keys(item);
+      if (keys.length !== 1) return false;
+      return Array.isArray(item[keys[0]]);
+    });
+    if (allArrayValues) return true;
+  }
+
+  return false;
+}
+
 function serializeListBody(lst: SxPB.Value[], indent: number, level: number): string {
   const isMessageArray = lst.length > 0 && typeof lst[0] === "object" && !Array.isArray(lst[0]) && !(lst[0] instanceof SxPB.Lone) && !(lst[0] instanceof SxPB.Many);
 
@@ -117,14 +172,14 @@ function formatNestAtom(s: string, wrapInParens: boolean): string {
   // If string contains spaces or special characters that would require quotes,
   // we prefer `"" ...` (anonymous discriminated string) format if possible.
 
-  if (!s) return '""'; // Empty string -> ""
+  if (!s) return '("" "")'; // Empty string -> ("" "")
 
   // Check if string needs quotes or special handling
   if (isPlainString(s) && hasBarePrefix(s)) {
     return s;
   }
 
-  if (s.includes(" ") && !/[\t\n\v\f\r]/.test(s) && !s.includes("  ")) {
+  if (canFormatAsAnonymousDiscriminatedString(s)) {
     const parts = s.split(" ");
     const serializedParts = parts.map(formatAtom);
     const body = `"" ${serializedParts.join(" ")}`;
@@ -135,20 +190,19 @@ function formatNestAtom(s: string, wrapInParens: boolean): string {
 }
 
 function serializeNestBody(nest: SxPB.Nest, indent: number, level: number): string {
-  const list = nestToList(nest, true);
-
   const items: string[] = [];
   const pad = indent > 0 ? " ".repeat(indent * level) : "";
 
-  for (const item of list) {
-    if ((item as any)._isNestMarker) {
-      items.push('("")');
-    } else if (typeof item === "string") {
-      // Top level nest items (keys) should be wrapped in parens if they are anonymous discriminated strings
-      // to avoid being parsed as multiple items.
+  items.push('("")'); // Marker
+
+  for (const item of nest) {
+    if (typeof item === "string") {
       items.push(formatNestAtom(item, true));
-    } else if (Array.isArray(item) || item instanceof SxPB.List) {
-      const innerBody = serializeNestListInternal(item as SxPB.Value[], indent, level + 1);
+    } else {
+      // { key: SubNest }
+      const key = Object.keys(item)[0];
+      const subNest = item[key];
+      const innerBody = serializeNestListInternal(key, subNest, indent, level + 1);
       items.push(`(${innerBody})`);
     }
   }
@@ -176,20 +230,39 @@ function serializeNestBody(nest: SxPB.Nest, indent: number, level: number): stri
   return items.join(" ");
 }
 
-function serializeNestListInternal(lst: SxPB.Value[], indent: number, level: number): string {
+function serializeNestListInternal(key: string, nest: SxPB.Nest, indent: number, level: number): string {
   const items: string[] = [];
-  for (let i = 0; i < lst.length; i++) {
-    const item = lst[i];
+  items.push(formatAtom(key));
+
+  // If key is empty string (Anonymous Nest), we MUST insert `("")` (Empty List)
+  // to ensure it is parsed as a Generic List and not an Anonymous Discriminated String.
+  // This is required if the content consists only of scalars (which otherwise forms a valid string body).
+  // Adding `("")` is safe because it parses to an empty list which is ignored by listToNest.
+  if (key === "") {
+    items.push('("")');
+  }
+
+  // If nest contains exactly one string item, format it directly to avoid anonymous discriminated string format
+  if (nest.length === 1 && typeof nest[0] === "string") {
+    const s = nest[0];
+    if (canFormatAsAnonymousDiscriminatedString(s)) {
+      // Use inline anonymous discriminated string format: `"" part1 part2`
+      items.push(formatNestAtom(s, false));
+    } else {
+      // Use quoted string format: `"quoted string"`
+      items.push(formatAtom(s));
+    }
+    return items.join(" ");
+  }
+
+  for (const item of nest) {
     if (typeof item === "string") {
-      if (i === 0) {
-        items.push(formatAtom(item));
-      } else {
-        items.push(formatNestAtom(item, false));
-      }
-    } else if ((item as any)._isNestMarker) {
-      items.push('("")');
-    } else if (Array.isArray(item) || item instanceof SxPB.List) {
-      const innerBody = serializeNestListInternal(item as SxPB.Value[], indent, level + 1);
+      items.push(formatNestAtom(item, true));
+    } else {
+      // { key: SubNest }
+      const subKey = Object.keys(item)[0];
+      const subNest = item[subKey];
+      const innerBody = serializeNestListInternal(subKey, subNest, indent, level + 1);
       items.push(`(${innerBody})`);
     }
   }
@@ -199,6 +272,21 @@ function serializeNestListInternal(lst: SxPB.Value[], indent: number, level: num
 
 function serializeField(key: string, value: SxPB.Value, indent: number, level: number): string {
   const pad = indent > 0 ? " ".repeat(indent * level) : "";
+
+  if (Array.isArray(value)) {
+    // Check if it looks like a Nest (mixed content or nest-structure)
+    if (isLikeNest(value)) {
+      // Treat as Nest
+      // We cast to SxPB.Nest because serializeNestBody iterates it like an array, which native array satisfies.
+      // But we need to ensure the items are valid Nest items.
+      const body = serializeNestBody(value as any, indent, level + 1);
+
+      if (indent > 0 && body.includes("\n")) {
+        return `${pad}(${key} ${body}\n${pad})`;
+      }
+      return `${pad}(${key} ${body})`;
+    }
+  }
 
   if (value instanceof SxPB.Many) {
     // manyof_field
@@ -309,6 +397,11 @@ export function stringify(obj: SxPB.Value, indent: number = 1): string {
     if (items.length === 0) return "(())";
 
     if (Array.isArray(obj)) {
+      // Check for Nest heuristic
+      if (isLikeNest(obj)) {
+        return serializeNestBody(obj as any, indent, 0);
+      }
+
       const body = serializeListBody(obj, indent, 0);
       if (indent > 0) return `(())\n${body}`;
       if (indent === 0) return `(()) ${body}`;
@@ -336,23 +429,3 @@ export function stringify(obj: SxPB.Value, indent: number = 1): string {
   throw new Error("Top-level object must be a message/dict or a list/array");
 }
 
-function nestToList(nest: SxPB.Nest, includeMarker: boolean): SxPB.Value[] {
-  const items: SxPB.Value[] = [];
-  if (includeMarker) {
-    items.push({ _isNestMarker: true } as any);
-  }
-
-  for (const k in nest.value) {
-    const v = nest.value[k];
-    if (v === null) {
-      items.push(k);
-    } else {
-      // v is SxpbNest
-      // Flatten into [k, ...v_entries]
-      // Note: recursively call nestToList WITHOUT marker for the sub-list
-      const subItems = nestToList(v, false);
-      items.push(new SxPB.List([k, ...subItems]));
-    }
-  }
-  return items;
-}

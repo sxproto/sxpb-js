@@ -49,8 +49,57 @@ export class SxpbMany {
   }
 }
 
-export class SxpbNest {
-  constructor(public value: { [key: string]: SxpbNest | null } = {}) {}
+export type SxpbNestItem = string | { [key: string]: SxpbNest };
+
+export class SxpbNest extends Array<SxpbNestItem> {
+  constructor(items?: number | SxpbNestItem[] | Record<string, SxpbNest | null>) {
+    if (typeof items === "number") {
+      super(items);
+    } else if (Array.isArray(items)) {
+      super();
+      if (items.length > 0) {
+        this.length = items.length;
+        for (let i = 0; i < items.length; i++) {
+          this[i] = items[i];
+        }
+      }
+    } else if (items && typeof items === "object") {
+      super();
+      const keys = Object.keys(items);
+      for (const key of keys) {
+        const val = items[key];
+        if (val === null) {
+          this.push(key);
+        } else {
+          this.push({ [key]: val });
+        }
+      }
+    } else {
+      super();
+    }
+    Object.setPrototypeOf(this, SxpbNest.prototype);
+  }
+
+  pairs(): [string, SxpbNest | null][] {
+    const result: [string, SxpbNest | null][] = [];
+    for (const item of this) {
+      if (typeof item === "string") {
+        result.push([item, null]);
+      } else {
+        const key = Object.keys(item)[0];
+        result.push([key, item[key]]);
+      }
+    }
+    return result;
+  }
+
+  get value(): Record<string, SxpbNest | null> {
+    const dict: Record<string, SxpbNest | null> = {};
+    for (const [k, v] of this.pairs()) {
+      dict[k] = v;
+    }
+    return dict;
+  }
 }
 
 export const SxPBTypes = {
@@ -68,4 +117,5 @@ export namespace SxPBTypes {
   export type Many = SxpbMany;
   export type Nest = SxpbNest;
   export type Value = SxpbValue;
+  export type NestItem = SxpbNestItem;
 }

@@ -34,14 +34,13 @@ describe("SxPB Native Types and BigInt", () => {
 
   it("merges repeated list fields correctly in native mode", () => {
     // (k (()) 1 2) (k (()) 3 4)
-    // Internally: k is [SxpbList([1, 2]), SxpbList([3, 4])] (native array of SxpbLists)
-    // Unwrap: [[1, 2], [3, 4]]
+    // Internally: k is SxpbList([1, 2, 3, 4]) (merged lists)
+    // Unwrap: [1, 2, 3, 4]
     const text = "(k (()) 1 2) (k (()) 3 4)";
     const parsed = parse(text) as any;
     expect(Array.isArray(parsed.k)).toBe(true);
-    expect(parsed.k).toHaveLength(2);
-    expect(parsed.k[0]).toEqual([1, 2]);
-    expect(parsed.k[1]).toEqual([3, 4]);
+    expect(parsed.k).toHaveLength(4);
+    expect(parsed.k).toEqual([1, 2, 3, 4]);
   });
 
   it("BigInt: precise=true parses large integers as BigInt", () => {

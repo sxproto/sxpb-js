@@ -14,6 +14,7 @@ enum TokenType {
 interface Token {
   type: TokenType;
   value: string | number | boolean | bigint;
+  text?: string;
   line: number;
   column: number;
 }
@@ -95,11 +96,11 @@ class Lexer {
     // Try to match boolean
     if (this.input.startsWith("+true", this.pos)) {
       this.pos += 5; this.col += 5;
-      return { type: TokenType.BOOLEAN, value: true, line: startLine, column: startCol };
+      return { type: TokenType.BOOLEAN, value: true, text: "+true", line: startLine, column: startCol };
     }
     if (this.input.startsWith("+false", this.pos)) {
       this.pos += 6; this.col += 6;
-      return { type: TokenType.BOOLEAN, value: false, line: startLine, column: startCol };
+      return { type: TokenType.BOOLEAN, value: false, text: "+false", line: startLine, column: startCol };
     }
 
     const atom = this.readAtom();
@@ -110,16 +111,16 @@ class Lexer {
         // Check if it's an integer
         const bigIntVal = BigInt(atom);
         if (bigIntVal >= Number.MIN_SAFE_INTEGER && bigIntVal <= Number.MAX_SAFE_INTEGER) {
-          return { type: TokenType.NUMBER, value: Number(bigIntVal), line: startLine, column: startCol };
+          return { type: TokenType.NUMBER, value: Number(bigIntVal), text: atom, line: startLine, column: startCol };
         } else {
-          return { type: TokenType.NUMBER, value: bigIntVal, line: startLine, column: startCol };
+          return { type: TokenType.NUMBER, value: bigIntVal, text: atom, line: startLine, column: startCol };
         }
       }
       const num = parseFloat(atom);
-      return { type: TokenType.NUMBER, value: num, line: startLine, column: startCol };
+      return { type: TokenType.NUMBER, value: num, text: atom, line: startLine, column: startCol };
     }
 
-    return { type: TokenType.BARE, value: atom, line: startLine, column: startCol };
+    return { type: TokenType.BARE, value: atom, text: atom, line: startLine, column: startCol };
   }
 
   private readString(): Token {
@@ -364,7 +365,11 @@ export class Parser {
       }
 
       let valStr: string;
-      if (t.type === TokenType.BOOLEAN) {
+      if (t.type === TokenType.STRING) {
+        valStr = String(t.value);
+      } else if (t.text !== undefined) {
+        valStr = t.text;
+      } else if (t.type === TokenType.BOOLEAN) {
         valStr = t.value ? "+true" : "+false";
       } else {
         valStr = String(t.value);
@@ -387,7 +392,11 @@ export class Parser {
     ) {
       const t = this.consume();
       let valStr: string;
-      if (t.type === TokenType.BOOLEAN) {
+      if (t.type === TokenType.STRING) {
+        valStr = String(t.value);
+      } else if (t.text !== undefined) {
+        valStr = t.text;
+      } else if (t.type === TokenType.BOOLEAN) {
         valStr = t.value ? "+true" : "+false";
       } else {
         valStr = String(t.value);
@@ -411,6 +420,8 @@ export class Parser {
 
         if (isNativeArray) {
           (message[key] as SxPB.Value[]).push(val);
+        } else if (existing instanceof SxPB.List && val instanceof SxPB.List) {
+          existing.push(...val);
         } else {
           message[key] = [existing as SxPB.Value, val];
         }
@@ -484,6 +495,11 @@ export class Parser {
 
       } else {
         // regular_field
+        if (this.match(TokenType.RPAREN)) {
+          this.consume(TokenType.RPAREN);
+          return { [name]: {} };
+        }
+
         const value = this.parseValue();
         this.consume(TokenType.RPAREN);
         return { [name]: value };
@@ -536,7 +552,26 @@ export class Parser {
     while(!this.match(TokenType.RPAREN) && !this.match(TokenType.EOF)) {
       const t = this.peek();
       if (t.type === TokenType.LPAREN) {
-        items.push(this.parseGenericList());
+        // Check if it's an anonymous discriminated string `("" ...)` or empty anonymous nest `("")`
+        if (this.peek(1).type === TokenType.STRING && this.peek(1).value === "") {
+          if (this.peek(2).type === TokenType.RPAREN) {
+            // `("")` -> Empty Anonymous Nest (List)
+            this.consume(TokenType.LPAREN);
+            this.consume(TokenType.STRING);
+            this.consume(TokenType.RPAREN);
+            items.push(new SxPB.List([]));
+          } else if (this.isPureAnonymousString(2)) {
+            // `("" ...)` -> Anonymous Discriminated String
+            this.consume(TokenType.LPAREN);
+            this.consume(TokenType.STRING);
+            items.push(this.parseAnonymousDiscriminatedStringBody());
+            this.consume(TokenType.RPAREN);
+          } else {
+            items.push(this.parseGenericList());
+          }
+        } else {
+          items.push(this.parseGenericList());
+        }
       } else if (t.type === TokenType.STRING && t.value === "") {
         // Anonymous discriminated string inside generic list?
         // e.g. `("" a b)`
@@ -556,6 +591,17 @@ export class Parser {
     }
     this.consume(TokenType.RPAREN);
     return new SxPB.List(items);
+  }
+
+  private isPureAnonymousString(offset: number): boolean {
+    let i = offset;
+    while (true) {
+      const t = this.peek(i);
+      if (t.type === TokenType.EOF) return false;
+      if (t.type === TokenType.RPAREN) return true;
+      if (t.type === TokenType.LPAREN) return false;
+      i++;
+    }
   }
 
   private parseArrayBody(): SxPB.List | SxPB.Nest {
@@ -592,19 +638,42 @@ export class Parser {
           this.consume(TokenType.RPAREN);
           item = {};
         } else if (this.peek(1).type === TokenType.STRING && this.peek(1).value === "") {
-          // `("" ...)` -> anonymous discriminated string
-          // Structure: LPAREN, STRING(""), (ESCAPED_STRING | MULTILINE_STRING | PLAIN)+, RPAREN
-          this.consume(TokenType.LPAREN);
-          this.consume(TokenType.STRING); // Consume ""
+          // `("" ...)` -> anonymous discriminated string OR generic list starting with "" (in Nest)
 
-          // Special handling for anonymous discriminated string body (always space separated)
-          const strBody = this.parseAnonymousDiscriminatedStringBody();
+          if (this.peek(2).type === TokenType.RPAREN) {
+            // `("")` -> Empty Anonymous Nest (List) OR Nest Marker (Empty String)
+            this.consume(TokenType.LPAREN);
+            this.consume(TokenType.STRING);
+            this.consume(TokenType.RPAREN);
 
-          this.consume(TokenType.RPAREN);
-          item = strBody;
+            if (items.length === 0) {
+              // If it's the first item, it's the Nest Marker `""`
+              item = "";
+              fromDiscriminatedEmptyString = true;
+            } else {
+              // Otherwise it's an empty nest
+              item = new SxPB.List([]);
+            }
+          } else if (this.isPureAnonymousString(2)) {
+            // `("" ...)` -> anonymous discriminated string
+            // Structure: LPAREN, STRING(""), (ESCAPED_STRING | MULTILINE_STRING | PLAIN)+, RPAREN
+            this.consume(TokenType.LPAREN);
+            this.consume(TokenType.STRING); // Consume ""
 
-          if (strBody === "") {
-            fromDiscriminatedEmptyString = true;
+            // Special handling for anonymous discriminated string body (always space separated)
+            const strBody = this.parseAnonymousDiscriminatedStringBody();
+
+            this.consume(TokenType.RPAREN);
+            item = strBody;
+
+            if (strBody === "") {
+              fromDiscriminatedEmptyString = true;
+            }
+          } else if (isNest) {
+            // Treat as generic list
+            item = this.parseGenericList();
+          } else {
+            throw new Error("Invalid anonymous string: contains nested items.");
           }
         } else if (this.peek(1).type === TokenType.LPAREN && this.peek(2).type === TokenType.RPAREN) {
           // `(() ...)` -> anonymous discriminated message
@@ -675,43 +744,45 @@ export class Parser {
   }
 
   private listToNest(items: SxPB.Value[]): SxPB.Nest {
-    const nestData: { [key: string]: SxPB.Nest | null } = {};
+    const nestItems: SxPB.NestItem[] = [];
 
     for (const item of items) {
       if (typeof item === "string") {
-        nestData[item] = null;
+        nestItems.push(item);
       } else if (item instanceof SxPB.List || Array.isArray(item)) {
         // [Key, ...SubItems]
         const arr = Array.isArray(item) ? item : (item as SxPB.List).toList();
         if (arr.length > 0) {
           const key = String(arr[0]); // Force key to string
           const subItems = arr.slice(1);
-          nestData[key] = this.listToNest(subItems);
+          nestItems.push({ [key]: this.listToNest(subItems) });
         }
       } else {
         // Treat numbers and booleans as string keys.
         if (typeof item === "number" || typeof item === "boolean") {
-          nestData[String(item)] = null;
+          nestItems.push(String(item));
         }
         // Ignore unexpected Dict/Message items in Nest list.
         // Note: `()` is parsed as an empty Dict `{}` by parseArrayBody, so it falls here and is ignored.
       }
     }
 
-    return new SxPB.Nest(nestData);
+    return new SxPB.Nest(nestItems);
   }
 }
 
 function unwrap(value: SxPB.Value): SxPB.Value {
   if (value instanceof SxPB.Nest) {
-    // Keep Nest as SxPB.Nest to preserve semantics (recursive dict with nulls vs sub-dicts),
-    // but unwrap its children recursively.
-    const newNestData: { [key: string]: SxPB.Nest | null } = {};
-    for (const k in value.value) {
-      const v = value.value[k];
-      newNestData[k] = v ? (unwrap(v) as SxPB.Nest) : null;
-    }
-    return new SxPB.Nest(newNestData);
+    // Unwrap SxPB.Nest to native Array
+    return Array.from(value).map((item: SxPB.NestItem) => {
+      if (typeof item === "string") {
+        return item;
+      } else {
+        const key = Object.keys(item)[0];
+        const val = item[key];
+        return { [key]: unwrap(val) };
+      }
+    });
   }
   if (value instanceof SxPB.List) {
     return Array.from(value).map(unwrap);

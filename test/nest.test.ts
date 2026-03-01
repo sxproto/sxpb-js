@@ -9,6 +9,7 @@ test("user example", () => {
      (w a b)
      (x "" c d)
      ("y z" "" e f)
+     (quoted_value "puts(\\"hello world\\");")
     )
   `;
   const data = SxPB.parse(sxpb_text, true) as SxPB.Dict;
@@ -39,6 +40,11 @@ test("user example", () => {
   expect(yz).toBeInstanceOf(SxPB.Nest);
   expect(yz!.value["e f"]).toBeNull();
 
+  // (quoted_value "puts(\"hello world\");") -> quoted_value -> {"puts(\"hello world\");": None}
+  const qv = nest.value["quoted_value"];
+  expect(qv).toBeInstanceOf(SxPB.Nest);
+  expect(qv!.value['puts("hello world");']).toBeNull();
+
   // Serialization test
   const generated_sxpb = SxPB.stringify(data, 1);
 
@@ -48,6 +54,7 @@ test("user example", () => {
   expect(generated_sxpb).toContain(" (w a b)");
   expect(generated_sxpb).toContain(' (x "" c d)');
   expect(generated_sxpb).toContain(' ("y z" "" e f)');
+  expect(generated_sxpb).toContain(' (quoted_value "puts(\\"hello world\\");")');
 });
 
 test("nest roundtrip", () => {
