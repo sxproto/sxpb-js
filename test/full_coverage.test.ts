@@ -159,8 +159,8 @@ describe("SxPB Serializer", () => {
       ])
     };
     const output = stringify(obj);
-    // (properties (()) (k1 v1) (k2 v2))
-    expect(output).toContain("(properties (())");
+    // ((properties) (k1 v1) (k2 v2))
+    expect(output).toContain("((properties)");
     expect(output).toContain("(k1 v1)");
     expect(output).toContain("(k2 v2)");
   });

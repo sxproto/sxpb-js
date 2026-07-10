@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { stringify } from "../src/serializer.js";
 import { parse } from "../src/parser.js";
-import { SxpbLone, SxpbMany } from "../src/types.js";
+import { SxpbLone, SxpbMany, SxpbNest } from "../src/types.js";
 
 describe("SxPB Serializer", () => {
   it("serializes simple message", () => {
@@ -45,8 +45,8 @@ describe("SxPB Serializer", () => {
       ])
     };
     const output = stringify(obj);
-    // (properties (()) (k1 v1) (k2 v2))
-    expect(output).toContain("(properties (())");
+    // ((properties) (k1 v1) (k2 v2))
+    expect(output).toContain("((properties)");
     expect(output).toContain("(k1 v1)");
     expect(output).toContain("(k2 v2)");
   });
@@ -58,10 +58,66 @@ describe("SxPB Serializer", () => {
     expect(output).toContain("((config debug) +true)");
   });
 
+  it("serializes SxpbLone array option", () => {
+    const obj = {
+      my_key: new SxpbLone({my_loneof_array_option: [1, 2, 3]})
+    };
+    expect(stringify(obj, 0)).toBe(
+      "((my_key my_loneof_array_option) (()) 1 2 3)"
+    );
+  });
+
+  it("serializes SxpbLone empty many option", () => {
+    const obj = {
+      choice: new SxpbLone({array: new SxpbMany([])})
+    };
+    expect(stringify(obj, 0)).toBe("((choice array) (()))");
+  });
+
   it("roundtrips simple object", () => {
     const obj = { name: "test", count: 1 };
     const s = stringify(obj);
     const o = parse(s);
     expect(o).toEqual(obj);
+  });
+
+  it("serializes canonical string atoms", () => {
+    const obj = {
+      strings: ["1", "two words", "bare"],
+      flag_strings: ["+true", "+false", "true"],
+      needs_quote: "1 2"
+    };
+    expect(stringify(obj, 0)).toBe(
+      '(strings (()) "1" "two words" bare) ' +
+      '(flag_strings (()) "+true" "+false" true) ' +
+      '(needs_quote "1 2")'
+    );
+  });
+
+  it("serializes canonical quoted field names", () => {
+    expect(stringify({"two words": "ok", "1": "one"}, 0)).toBe(
+      '("1" one) ("two words" ok)'
+    );
+  });
+
+  it("serializes canonical top-level nest", () => {
+    const nest = new SxpbNest({
+      black: null,
+      white: new SxpbNest({bear: null}),
+      grass: new SxpbNest({green: null, verdant: null})
+    });
+    expect(stringify(nest, 1)).toBe(
+      '("")\nblack\n(white bear)\n(grass green verdant)'
+    );
+  });
+
+  it("serializes canonical anonymous nest", () => {
+    const nest = new SxpbNest({
+      "": new SxpbNest({content: null}),
+      empty: new SxpbNest({})
+    });
+    expect(stringify(nest, 1)).toBe(
+      '("")\n("" ("") content)\n(empty)'
+    );
   });
 });

@@ -115,6 +115,15 @@ test("formatting rules", () => {
   expect(serialized_mixed).toContain("\n (sub x)");
 });
 
+test("named nest discriminator is not an empty child", () => {
+  const data = SxPB.parse('("")\n(anonymous ("") content)', true) as SxPB.Nest;
+  const anonymous = data.value["anonymous"];
+  expect(anonymous).toBeInstanceOf(SxPB.Nest);
+  expect(anonymous!.value[""]).toBeUndefined();
+  expect(anonymous!.value["content"]).toBeNull();
+});
+
+
 test("toplevel nest", () => {
   const sxpb_text = `
     ("")

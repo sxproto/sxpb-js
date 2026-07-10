@@ -207,8 +207,10 @@ class Lexer {
 export class Parser {
   private tokens: Token[];
   private pos: number = 0;
+  private precise: boolean;
 
   constructor(input: string, precise: boolean = false) {
+    this.precise = precise;
     const lexer = new Lexer(input, precise);
     this.tokens = [];
     let token = lexer.getNextToken();
@@ -243,6 +245,12 @@ export class Parser {
   }
 
   public parse(): SxPB.Value {
+    if (this.match(TokenType.LPAREN) && this.peek(1).type === TokenType.RPAREN) {
+      this.consume(TokenType.LPAREN);
+      this.consume(TokenType.RPAREN);
+      return this.parseMessageBody();
+    }
+
     if ((this.match(TokenType.LPAREN) &&
             this.peek(1).type === TokenType.LPAREN &&
             this.peek(2).type === TokenType.RPAREN &&
@@ -418,10 +426,10 @@ export class Parser {
         const existing = message[key];
         const isNativeArray = Array.isArray(existing) && !(existing instanceof SxPB.List);
 
-        if (isNativeArray) {
-          (message[key] as SxPB.Value[]).push(val);
-        } else if (existing instanceof SxPB.List && val instanceof SxPB.List) {
+        if (existing instanceof SxPB.List && val instanceof SxPB.List) {
           existing.push(...val);
+        } else if (isNativeArray) {
+          (message[key] as SxPB.Value[]).push(val);
         } else {
           message[key] = [existing as SxPB.Value, val];
         }
@@ -483,6 +491,11 @@ export class Parser {
       // `(name ...)`
       const name = this.parseFieldName();
 
+      if (this.match(TokenType.RPAREN)) {
+        this.consume(TokenType.RPAREN);
+        return { [name]: {} };
+      }
+
       // Check for `(())` to detect manyof_field variant 1 or regular_field with array_body
       if (this.match(TokenType.LPAREN) &&
                  this.peek(1).type === TokenType.LPAREN &&
@@ -525,6 +538,13 @@ export class Parser {
       return this.parseArrayBodyOrManyOfBody();
     }
 
+    if (this.match(TokenType.LPAREN) && this.peek(1).type === TokenType.RPAREN) {
+      // Dict discriminator: `()`, followed by message-body fields.
+      this.consume(TokenType.LPAREN);
+      this.consume(TokenType.RPAREN);
+      return this.parseMessageBody();
+    }
+
     if (this.match(TokenType.LPAREN)) {
       return this.parseMessageBody();
     }
@@ -552,7 +572,7 @@ export class Parser {
     while(!this.match(TokenType.RPAREN) && !this.match(TokenType.EOF)) {
       const t = this.peek();
       if (t.type === TokenType.LPAREN) {
-        // Check if it's an anonymous discriminated string `("" ...)` or empty anonymous nest `("")`
+        // Check if it's an anonymous discriminated string `("" ...)` or empty anonymous nest `("")`.
         if (this.peek(1).type === TokenType.STRING && this.peek(1).value === "") {
           if (this.peek(2).type === TokenType.RPAREN) {
             // `("")` -> Empty Anonymous Nest (List)
@@ -637,6 +657,15 @@ export class Parser {
           this.consume(TokenType.LPAREN);
           this.consume(TokenType.RPAREN);
           item = {};
+        } else if (isNest &&
+                   this.peek(1).type === TokenType.STRING &&
+                   this.peek(1).value === "" &&
+                   this.peek(2).type === TokenType.LPAREN &&
+                   this.peek(3).type === TokenType.STRING &&
+                   this.peek(3).value === "" &&
+                   this.peek(4).type === TokenType.RPAREN) {
+          // `("" ("") ...)` -> anonymous nest entry.
+          item = this.parseGenericList();
         } else if (this.peek(1).type === TokenType.STRING && this.peek(1).value === "") {
           // `("" ...)` -> anonymous discriminated string OR generic list starting with "" (in Nest)
 

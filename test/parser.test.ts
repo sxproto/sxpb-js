@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parse } from "../src/parser.js";
-import { SxpbLone, SxpbMany } from "../src/types.js";
+import { SxpbList, SxpbLone, SxpbMany } from "../src/types.js";
 
 describe("SxPB Parser", () => {
   it("parses empty message", () => {
@@ -30,11 +30,25 @@ describe("SxPB Parser", () => {
     });
   });
 
+  it("parses empty message field", () => {
+    expect(parse("(empty_message)")).toEqual({empty_message: {}});
+  });
+
+  it("parses top-level dict discriminator", () => {
+    expect(parse("() (a 1) (b 2)")).toEqual({a: 1, b: 2});
+  });
+
   it("parses array of scalars", () => {
     const input = "(tags (()) \"a\" \"b\" \"c\")";
     expect(parse(input)).toEqual({
       tags: ["a", "b", "c"]
     });
+  });
+
+  it("concatenates repeated list fields in precise mode", () => {
+    const result = parse("(k (()) 1 2) (k (()) 3 4)", true) as any;
+    expect(result.k).toBeInstanceOf(SxpbList);
+    expect(result.k).toEqual([1, 2, 3, 4]);
   });
 
   it("parses array of messages", () => {
@@ -61,6 +75,15 @@ describe("SxPB Parser", () => {
     const result = parse(input, true) as any;
     expect(result.config).toBeInstanceOf(SxpbLone);
     expect(result.config.value).toEqual({debug: true});
+  });
+
+  it("parses dict field with loneof array option", () => {
+    const input = "(my_dict () ((my_key my_loneof_array_option) (()) 1 2 3))";
+    const result = parse(input, true) as any;
+    expect(result.my_dict.my_key).toBeInstanceOf(SxpbLone);
+    expect(result.my_dict.my_key.value).toEqual({
+      my_loneof_array_option: [1, 2, 3]
+    });
   });
 
   it("disambiguates array_body and manyof_body", () => {
