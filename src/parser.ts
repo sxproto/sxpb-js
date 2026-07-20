@@ -567,6 +567,13 @@ export class Parser {
   }
 
   private parseGenericList(): SxPB.List {
+    if (this.match(TokenType.LPAREN) &&
+        this.peek(1).type === TokenType.LPAREN &&
+        this.peek(2).type === TokenType.RPAREN &&
+        this.peek(3).type === TokenType.RPAREN) {
+      throw new Error("Nest can only hold nests and strings.");
+    }
+
     this.consume(TokenType.LPAREN);
     const items: SxPB.Value[] = [];
     while(!this.match(TokenType.RPAREN) && !this.match(TokenType.EOF)) {

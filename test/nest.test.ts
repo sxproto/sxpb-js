@@ -115,6 +115,13 @@ test("formatting rules", () => {
   expect(serialized_mixed).toContain("\n (sub x)");
 });
 
+test.each([
+  '("") (x (()) y)',
+  '("") (glasses (()) (() (material (()) brass)))'
+])("rejects lists inside nests", (source) => {
+  expect(() => SxPB.parse(source, true)).toThrow("Nest can only hold nests and strings.");
+});
+
 test("named nest discriminator is not an empty child", () => {
   const data = SxPB.parse('("")\n(anonymous ("") content)', true) as SxPB.Nest;
   const anonymous = data.value["anonymous"];
