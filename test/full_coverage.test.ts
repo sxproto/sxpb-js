@@ -71,11 +71,11 @@ describe("SxPB Parser", () => {
     expect(result.properties.value[0].value).toEqual({k1: "v1"});
 
     // Test with scalars (if supported by grammar/parser implementation detail)
-    // My parser wraps scalar in SxpbLone({value: s}).
+    // Precise parsing keeps anonymous scalars distinct from an explicit `value` field.
     const inputScalars = "((tags) \"a\" \"b\")";
     const resultScalars = parse(inputScalars, true) as any;
     expect(resultScalars.tags).toBeInstanceOf(SxpbMany);
-    expect(resultScalars.tags.value[0].value).toEqual({value: "a"});
+    expect(resultScalars.tags.value[0].value).toEqual({"": "a"});
   });
 
   it("parses loneof field", () => {

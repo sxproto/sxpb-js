@@ -470,7 +470,7 @@ export class Parser {
             if (t.type === TokenType.NUMBER || t.type === TokenType.BOOLEAN || t.type === TokenType.STRING || t.type === TokenType.BARE) {
               // consume one atom
               const atomToken = this.consume();
-              items.push(new SxPB.Lone({ value: atomToken.value }));
+              items.push(new SxPB.Lone({ "": atomToken.value }));
             } else {
               throw new Error(`Expected scalar or field in manyof variant 2, got ${TokenType[t.type]}`);
             }
@@ -827,7 +827,7 @@ function unwrap(value: SxPB.Value): SxPB.Value {
     return value.value.map(unwrap);
   }
   if (value instanceof SxPB.Lone) {
-    return unwrap(value.value);
+    return unwrap(value.toDict());
   }
   if (Array.isArray(value)) {
     return value.map(unwrap);

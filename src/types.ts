@@ -37,6 +37,13 @@ export class SxpbLone {
   constructor(public value: { [key: string]: SxpbValue }) {}
 
   toDict() {
+    const entries = Object.entries(this.value);
+    if (entries.length === 1 && entries[0][0] === "") {
+      const anonymousValue = entries[0][1];
+      if (anonymousValue === null || typeof anonymousValue !== "object") {
+        return { value: anonymousValue };
+      }
+    }
     return this.value;
   }
 }

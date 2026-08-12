@@ -240,8 +240,11 @@ function manyofParts(value: SxPB.Many, indent: number, level: number): string[] 
   return value.value.map(item => {
     if (item instanceof SxPB.Lone) {
       const entries = Object.entries(item.value);
-      if (entries.length === 1 && entries[0][0] === "value") {
-        return formatAtom(entries[0][1]);
+      if (entries.length === 1 &&
+          entries[0][0] === "" &&
+          (entries[0][1] === null || typeof entries[0][1] !== "object")) {
+        const pad = indent > 0 ? " ".repeat(indent * (level + 1)) : "";
+        return `${pad}${formatAtom(entries[0][1])}`;
       }
       const [itemKey, itemValue] = entries[0];
       return serializeField(itemKey, itemValue, indent, level + 1);
