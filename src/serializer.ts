@@ -236,15 +236,37 @@ function serializeListBody(lst: SxPB.Value[], indent: number, level: number): st
   return indent > 0 ? items.join("\n") : items.join(" ");
 }
 
-function manyofParts(value: SxPB.Many, indent: number, level: number): string[] {
-  return value.value.map(item => {
+function serializeAnonymousMessage(value: SxPB.Dict, indent: number, level: number): string {
+  const pad = indent > 0 ? " ".repeat(indent * level) : "";
+  const body = serializeMessageBody(value, indent, level + 1);
+  if (!body) return `${pad}()`;
+  if (indent > 0) return `${pad}(()\n${body}\n${pad})`;
+  if (indent === 0) return `(() ${body})`;
+  return `(()${body})`;
+}
+
+function manyofParts(
+  value: SxPB.Many,
+  indent: number,
+  level: number,
+  nameFirstAnonymous: boolean = false
+): string[] {
+  return value.value.map((item, index) => {
     if (item instanceof SxPB.Lone) {
       const entries = Object.entries(item.value);
-      if (entries.length === 1 &&
-          entries[0][0] === "" &&
-          (entries[0][1] === null || typeof entries[0][1] !== "object")) {
-        const pad = indent > 0 ? " ".repeat(indent * (level + 1)) : "";
-        return `${pad}${formatAtom(entries[0][1])}`;
+      if (entries.length === 1 && entries[0][0] === "") {
+        const anonymousValue = entries[0][1];
+        if (nameFirstAnonymous && index === 0) {
+          return serializeField("value", anonymousValue, indent, level + 1);
+        }
+        if (isDict(anonymousValue)) {
+          return serializeAnonymousMessage(anonymousValue, indent, level + 1);
+        }
+        if (anonymousValue === null || typeof anonymousValue !== "object") {
+          const pad = indent > 0 ? " ".repeat(indent * (level + 1)) : "";
+          return `${pad}${formatAtom(anonymousValue)}`;
+        }
+        throw new Error("Anonymous manyof elements must be scalars or messages.");
       }
       const [itemKey, itemValue] = entries[0];
       return serializeField(itemKey, itemValue, indent, level + 1);
@@ -379,7 +401,7 @@ export function stringify(obj: SxPB.Value, indent: number = 1): string {
 
   if (obj instanceof SxPB.Many) {
     if (obj.value.length === 0) return "(())";
-    const parts = manyofParts(obj, indent, 0);
+    const parts = manyofParts(obj, indent, 0, true);
     if (indent > 0) return `(())\n${parts.join("\n")}`;
     if (indent === 0) return `(()) ${parts.join(" ")}`;
     return `(())${joinCondensed(parts)}`;

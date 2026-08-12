@@ -24,6 +24,10 @@ type ScalarListKind = "string" | "number" | "boolean";
 class ScalarListNormalizer {
   private kind?: ScalarListKind;
 
+  get stringFirst(): boolean {
+    return this.kind === "string";
+  }
+
   normalize(value: SxPB.Value, token: Token): SxPB.Value {
     if (this.kind === undefined) {
       if (typeof value === "string") {
@@ -69,6 +73,29 @@ function isMessageValue(value: SxPB.Value): value is SxPB.Dict {
   return value !== null &&
          typeof value === "object" &&
          value.constructor === Object;
+}
+
+class AnonymousListNormalizer {
+  private kind?: "scalar" | "message";
+  private scalar = new ScalarListNormalizer();
+
+  get stringFirst(): boolean {
+    return this.kind === "scalar" && this.scalar.stringFirst;
+  }
+
+  normalize(value: SxPB.Value, token: Token): SxPB.Value {
+    const incomingKind = isMessageValue(value) ? "message" : "scalar";
+    if (this.kind === undefined) {
+      this.kind = incomingKind;
+    } else if (this.kind !== incomingKind) {
+      throw new Error(`Incompatible anonymous manyof element at line ${token.line}:${token.column}`);
+    }
+
+    if (incomingKind === "message") {
+      return value;
+    }
+    return this.scalar.normalize(value, token);
+  }
 }
 
 class Lexer {
@@ -504,33 +531,9 @@ export class Parser {
       if (this.match(TokenType.RPAREN)) {
         // `((name) ...)` -> manyof_field variant 2
         this.consume(TokenType.RPAREN);
-        const items: SxPB.Value[] = [];
-
-        // manyof_field variant 2 body: (manyof_item | any_field)*
-        while (!this.match(TokenType.RPAREN)) {
-          if (this.match(TokenType.LPAREN)) {
-            // any_field
-            const f = this.parseField();
-            items.push(new SxPB.Lone(f));
-          } else {
-            // manyof_item (scalar)
-            // parseScalar() potentially merges items into one string (string_body),
-            // but manyof_item expects individual items.
-            // Grammar: manyof_item: SIGNED_NUMBER | ESCAPED_STRING | MULTILINE_STRING | BARE | BOOLEAN
-            // Thus it does NOT support string_body (concatenated) here.
-
-            const t = this.peek();
-            if (t.type === TokenType.NUMBER || t.type === TokenType.BOOLEAN || t.type === TokenType.STRING || t.type === TokenType.BARE) {
-              // consume one atom
-              const atomToken = this.consume();
-              items.push(new SxPB.Lone({ "": atomToken.value }));
-            } else {
-              throw new Error(`Expected scalar or field in manyof variant 2, got ${TokenType[t.type]}`);
-            }
-          }
-        }
+        const many = this.parseManyOfBodyItems();
         this.consume(TokenType.RPAREN);
-        return { [name1]: new SxPB.Many(items) };
+        return { [name1]: many };
       } else {
         // `((key subkey) ...)` -> loneof_field
         const subkey = this.parseFieldName();
@@ -612,10 +615,55 @@ export class Parser {
 
   private parseManyOfBodyItems(): SxPB.Many {
     const items: SxPB.Value[] = [];
-    while(!this.match(TokenType.RPAREN) && !this.match(TokenType.EOF)) {
-      const f = this.parseField();
-      items.push(new SxPB.Lone(f));
+    const normalizer = new AnonymousListNormalizer();
+
+    while (!this.match(TokenType.RPAREN) && !this.match(TokenType.EOF)) {
+      const token = this.peek();
+
+      if (token.type === TokenType.LPAREN) {
+        if (this.peek(1).type === TokenType.RPAREN) {
+          this.consume(TokenType.LPAREN);
+          this.consume(TokenType.RPAREN);
+          items.push(new SxPB.Lone({ "": normalizer.normalize({}, token) }));
+          continue;
+        }
+
+        if (this.peek(1).type === TokenType.LPAREN &&
+            this.peek(2).type === TokenType.RPAREN) {
+          this.consume(TokenType.LPAREN);
+          this.consume(TokenType.LPAREN);
+          this.consume(TokenType.RPAREN);
+          const message = this.parseMessageBody();
+          this.consume(TokenType.RPAREN);
+          items.push(new SxPB.Lone({ "": normalizer.normalize(message, token) }));
+          continue;
+        }
+
+        if (this.peek(1).type === TokenType.STRING && this.peek(1).value === "") {
+          this.consume(TokenType.LPAREN);
+          this.consume(TokenType.STRING);
+          const value = this.parseAnonymousDiscriminatedStringBody();
+          this.consume(TokenType.RPAREN);
+          items.push(new SxPB.Lone({ "": normalizer.normalize(value, token) }));
+          continue;
+        }
+
+        items.push(new SxPB.Lone(this.parseField()));
+        continue;
+      }
+
+      if (token.type === TokenType.NUMBER ||
+          token.type === TokenType.BOOLEAN ||
+          token.type === TokenType.STRING ||
+          token.type === TokenType.BARE) {
+        this.consume();
+        items.push(new SxPB.Lone({ "": normalizer.normalize(token.value, token) }));
+        continue;
+      }
+
+      throw new Error(`Unexpected manyof element at line ${token.line}:${token.column}`);
     }
+
     return new SxPB.Many(items);
   }
 

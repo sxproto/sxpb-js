@@ -65,4 +65,73 @@ describe("manyof element keys", () => {
     expect((parsed.m.value[1] as SxpbLone).value).toEqual({ value: "" });
     expect(stringify(parsed, 0)).toBe(input);
   });
+
+  it.each([
+    [
+      "((choice) (named 9) one (middle +false) 02 +true)",
+      [{ named: 9 }, { "": "one" }, { middle: false }, { "": "02" }, { "": "+true" }]
+    ],
+    [
+      "((choice) (named one) 1 (middle +true) 2.5)",
+      [{ named: "one" }, { "": 1 }, { middle: true }, { "": 2.5 }]
+    ],
+    [
+      "(choice (()) (named one) +true (middle 9) 00 +01 +false)",
+      [{ named: "one" }, { "": true }, { middle: 9 }, { "": false }, { "": true }, { "": false }]
+    ],
+    [
+      "((choice) () (named 1) (() (x 2)))",
+      [{ "": {} }, { named: 1 }, { "": { x: 2 } }]
+    ],
+    [
+      "((choice) 1 (named (x 2)) 3)",
+      [{ "": 1 }, { named: { x: 2 } }, { "": 3 }]
+    ]
+  ])("uses the first anonymous element to normalize a manyof", (source, expected) => {
+    const parsed = parse(source, true) as { choice: SxpbMany };
+    expect(parsed.choice.value.map(item => (item as SxpbLone).value)).toEqual(expected);
+    expect(parse(stringify(parsed, 0), true)).toEqual(parsed);
+  });
+
+  it.each([
+    "((choice) 1 (named word) +true)",
+    "((choice) +true (named word) 2)",
+    "((choice) one (named 1) ())",
+    "((choice) () (named 1) one)",
+    "((choice) 1 (named word) (() (x 2)))",
+    "((choice) (() (x 1)) (named word) 2)",
+    '((choice) 1 "")',
+    '((choice) "" ())'
+  ])("rejects incompatible anonymous manyof kinds: %s", source => {
+    expect(() => parse(source, true)).toThrow();
+  });
+
+  it("names an anonymous first top-level entry to preserve the manyof container", () => {
+    const value = new SxpbMany([
+      new SxpbLone({ "": 1 }),
+      new SxpbLone({ "": 2 })
+    ]);
+
+    expect(stringify(value, 0)).toBe("(()) (value 1) 2");
+    const reparsed = parse(stringify(value, 0), true);
+    expect(reparsed).toBeInstanceOf(SxpbMany);
+    expect((reparsed as SxpbMany).value.map(item => (item as SxpbLone).value)).toEqual([
+      { value: 1 },
+      { "": 2 }
+    ]);
+  });
+
+  it("prints anonymous manyof messages with anonymous-message syntax", () => {
+    const parsed = parse("((choice) () (named 1) (() (x 2)))", true);
+    expect(stringify(parsed, 0)).toBe("((choice) () (named 1) (() (x 2)))");
+    expect(stringify(parsed, 2)).toBe(
+      "((choice)\n" +
+      "  ()\n" +
+      "  (named 1)\n" +
+      "  (()\n" +
+      "    (x 2)\n" +
+      "  )\n" +
+      ")"
+    );
+  });
 });
