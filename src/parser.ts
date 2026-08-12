@@ -350,63 +350,41 @@ export class Parser {
            this.peek(2).type === TokenType.RPAREN;
   }
 
-  private isNextTokenAnArrayBodyItem(): boolean {
-    // Look ahead to determine if the body content is an array_body or manyof_body.
-    // array_body items can be:
-    // 1. Scalar (NUMBER, BOOLEAN, STRING, BARE)
-    // 2. Empty message: `()`
-    // 3. Anonymous discriminated string: `("" ...)`
-    // 4. Anonymous discriminated message: `(() ...)`
-    //
-    // manyof_body items are fields: `(key ...)` or `((key) ...)`
-
-    const t4 = this.peek(4); // Token after `(())`
-
-    if (
-      t4.type === TokenType.STRING ||
-      t4.type === TokenType.NUMBER ||
-      t4.type === TokenType.BOOLEAN ||
-      t4.type === TokenType.BARE
-    ) {
-      return true; // Scalar value
+  private isCurrentTokenAnArrayBodyItem(): boolean {
+    const token = this.peek();
+    if (token.type === TokenType.STRING ||
+        token.type === TokenType.NUMBER ||
+        token.type === TokenType.BOOLEAN ||
+        token.type === TokenType.BARE) {
+      return true;
     }
 
-    if (t4.type === TokenType.LPAREN) {
-      const t5 = this.peek(5);
-      if (t5.type === TokenType.RPAREN) {
-        return true; // `()`
-      }
-      if (t5.type === TokenType.STRING && t5.value === "") {
-        // `("" ...)` -> anonymous discriminated string
-        return true;
-      }
-      if (t5.type === TokenType.LPAREN) {
-        const t6 = this.peek(6);
-        if (t6.type === TokenType.RPAREN) {
-          return true; // `(()` -> anonymous discriminated message
-        }
-      }
+    if (token.type !== TokenType.LPAREN) {
+      return false;
     }
-
-    return false;
+    if (this.peek(1).type === TokenType.RPAREN) {
+      return true;
+    }
+    if (this.peek(1).type === TokenType.STRING && this.peek(1).value === "") {
+      return true;
+    }
+    return this.peek(1).type === TokenType.LPAREN &&
+           this.peek(2).type === TokenType.RPAREN;
   }
 
   private parseArrayBodyOrManyOfBody(): SxPB.List | SxPB.Many | SxPB.Nest {
-    if (this.peek(4).type === TokenType.EOF ||
-        this.peek(4).type === TokenType.RPAREN) {
-      this.consumeHeader();
-      return new SxPB.List([]);
-    }
-
     if (this.isNestHeader()) {
       return this.parseArrayBody();
     }
 
-    if (this.isNextTokenAnArrayBodyItem()) {
-      return this.parseArrayBody();
-    } else {
-      return this.parseManyOfBody();
+    this.consumeHeader();
+    if (this.match(TokenType.EOF) || this.match(TokenType.RPAREN)) {
+      return new SxPB.List([]);
     }
+    if (this.isCurrentTokenAnArrayBodyItem()) {
+      return this.parseArrayBody();
+    }
+    return this.parseManyOfBodyItems();
   }
 
   private consumeHeader() {
@@ -606,11 +584,6 @@ export class Parser {
     }
 
     return this.parseScalar();
-  }
-
-  private parseManyOfBody(): SxPB.Many {
-    this.consumeHeader();
-    return this.parseManyOfBodyItems();
   }
 
   private parseManyOfBodyItems(): SxPB.Many {
