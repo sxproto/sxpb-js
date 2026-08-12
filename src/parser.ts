@@ -616,7 +616,7 @@ export class Parser {
       staged = this.parseManyOfBodyItems(normalizer).value;
     } else {
       const seed = target.length > 0 ? target[0] : undefined;
-      const parsed = this.parseArrayBody(seed, false);
+      const parsed = this.parseArrayBody(seed);
       if (!(parsed instanceof SxPB.List)) {
         throw new Error(
           `Expected append elements for an array at line ${operator.line}:${operator.column}`
@@ -900,17 +900,8 @@ export class Parser {
   }
 
   private parseArrayBody(
-    seedValue?: SxPB.Value,
-    allowLeadingHeader: boolean = true
+    seedValue?: SxPB.Value
   ): SxPB.List | SxPB.Nest {
-    if (allowLeadingHeader &&
-        this.match(TokenType.LPAREN) &&
-        this.peek(1).type === TokenType.LPAREN &&
-        this.peek(2).type === TokenType.RPAREN &&
-        this.peek(3).type === TokenType.RPAREN) {
-      this.consumeHeader();
-    }
-
     const items: SxPB.Value[] = [];
     const scalarNormalizer = new ScalarListNormalizer();
     let arrayKind: "scalar" | "message" | undefined;

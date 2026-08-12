@@ -46,3 +46,14 @@ describe("array element kinds", () => {
     expect(parsed.a).toHaveLength(0);
   });
 });
+
+describe("redundant array discriminators", () => {
+  it.each([
+    "(a (()) (()) 1)",
+    "(a (()) (()))",
+    "(outer (a (()) (()) 1))"
+  ])("rejects a second list discriminator instead of swallowing it: %s", source => {
+    expect(() => parse(source, true)).toThrow(/Unexpected list discriminator as array element/);
+    expect(() => parse(source)).toThrow(/Unexpected list discriminator as array element/);
+  });
+});
