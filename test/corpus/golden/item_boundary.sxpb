@@ -1,0 +1,9 @@
+; Bare empty strings remain individual collection items.
+(empty_items (()) "" tail)
+
+((choices)
+ (named 1)
+ ("" two words)
+ ""
+ tail
+)

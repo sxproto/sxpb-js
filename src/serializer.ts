@@ -13,6 +13,9 @@ function hasBarePrefix(s: string): boolean {
   // `+true` / `+false` are booleans.
   if (s === "+true" || s === "+false") return false;
 
+  // These singleton punctuation atoms are valid bare strings.
+  if (s === "-" || s === ".") return true;
+
   // If it looks like a number, it must be quoted to remain a string.
   if (/^[+-]?\d+$/.test(s)) return false;
   if (/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(s)) return false;

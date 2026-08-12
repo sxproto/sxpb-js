@@ -107,7 +107,7 @@ describe("SxPB Parser", () => {
 
   it("handles BARE strings correctly", () => {
     expect(parse("(k bareword)")).toEqual({k: "bareword"});
-    expect(parse("(k 1.2.3)")).toEqual({k: "1.2.3"});
+    expect(() => parse("(k 1.2.3)")).toThrow();
     expect(parse("(k --option)")).toEqual({k: "--option"});
     // Special chars in bare
     expect(parse("(k a-b.c)")).toEqual({k: "a-b.c"});

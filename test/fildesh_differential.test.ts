@@ -13,7 +13,17 @@ const acceptedCases = [
   "((choice) (named one) 1 (middle +true) 2.5)",
   "(choice (()) (named one) +true (middle 9) 00 +01 +false)",
   "((choice) () (named 1) (() (x 2)))",
-  "((choice) 1 (named (x 2)) 3)"
+  "((choice) 1 (named (x 2)) 3)",
+  "(dash -) (dot .) (slash /)",
+  '(my_nest ("") (my_subnest ("") "" three leaves))',
+  '(my_nest ("") (my_subnest "" this is one discriminated string))',
+  '(my_nest ("") (my_subnest ("") ("" (""))))',
+  "(value word +)",
+  "(a (()) word + +trueish -.x)",
+  "((choice) word +)",
+  '(my_nest ("") +)',
+  '(nest ("") +true +false +1 -.5 (01 leaf) (1word mixed) (-- one) (.. two))',
+  '(nest ("") ("+name" leaf) ("-.name" leaf))'
 ];
 
 const rejectedCases = [
@@ -24,7 +34,26 @@ const rejectedCases = [
   "((choice) 1 (named word) +true)",
   "((choice) +true (named word) 2)",
   "((choice) one (named 1) ())",
-  "((choice) () (named 1) one)"
+  "((choice) () (named 1) one)",
+  "(value +)",
+  "(value +almost)",
+  "(-. value)",
+  "(a (()) 1word)",
+  "(a (()) +trueish)",
+  '(my_nest ("") (+ child))',
+  '(my_nest ("") (+true child))',
+  '(my_nest ("") (+trueish child))',
+  '(my_nest ("") (+1 child))',
+  '(my_nest ("") (-. child))',
+  '(my_nest ("") (-.5 child))',
+  '(my_nest ("") (my_subnest ("") ("")))',
+  '(nest ("") ())',
+  '(nest ("") (child ()))',
+  '("") ()',
+  '(nest ("") (()))',
+  '(nest ("") (() (x 1)))',
+  '(nest ("") (""))',
+  '(nest ("") (("" two words)))'
 ];
 
 function runFildesh(source: string) {
@@ -35,16 +64,17 @@ function runFildesh(source: string) {
 }
 
 describeWithFildesh("local Fildesh differential conformance", () => {
-  it.each(acceptedCases)("agrees on acceptance and accepts JS output: %s", source => {
+  it.each(acceptedCases)("preserves the precise value through both printers: %s", source => {
     const precise = parse(source, true);
     const fildesh = runFildesh(source);
 
     expect(fildesh.status, fildesh.stderr).toBe(0);
+    expect(parse(fildesh.stdout, true)).toEqual(precise);
 
-    // Canonical text is deliberately not compared while the pending local
-    // Fildesh stack still differs on float spelling and anonymous messages.
+    // Canonical text may differ because Fildesh normalizes float spelling.
     const jsThroughFildesh = runFildesh(stringify(precise, 0));
     expect(jsThroughFildesh.status, jsThroughFildesh.stderr).toBe(0);
+    expect(parse(jsThroughFildesh.stdout, true)).toEqual(precise);
   });
 
   it.each(rejectedCases)("agrees on rejection: %s", source => {
