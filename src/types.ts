@@ -1,8 +1,38 @@
-export interface SxpbDict {
+declare const sxpbDictBrand: unique symbol;
+
+/**
+ * A plain field record: the runtime shape of SxPB messages.
+ */
+export interface SxpbMesg {
   [key: string]: SxpbValue;
 }
 
-export type SxpbValue = string | number | bigint | boolean | SxpbDict | SxpbList | SxpbLone | SxpbMany | SxpbNest | SxpbValue[];
+/**
+ * A dict value: a message body whose `()` discriminator was present in
+ * the source. The dict/message distinction is semantic, so precise parsing
+ * preserves it with this runtime class while messages stay plain objects.
+ * Fields are own data properties (safe for hostile keys such as
+ * `__proto__` or `constructor`).
+ */
+export class SxpbDict {
+  [key: string]: SxpbValue;
+  declare private readonly [sxpbDictBrand]: void;
+
+  constructor(value?: SxpbMesg) {
+    if (value) {
+      for (const key of Object.keys(value)) {
+        Object.defineProperty(this, key, {
+          value: value[key],
+          enumerable: true,
+          configurable: true,
+          writable: true
+        });
+      }
+    }
+  }
+}
+
+export type SxpbValue = string | number | bigint | boolean | SxpbMesg | SxpbDict | SxpbList | SxpbLone | SxpbMany | SxpbNest | SxpbValue[];
 
 export class SxpbList extends Array<SxpbValue> {
   constructor(items?: number | SxpbValue[]) {
@@ -110,6 +140,7 @@ export class SxpbNest extends Array<SxpbNestItem> {
 }
 
 export const SxPBTypes = {
+  Dict: SxpbDict,
   List: SxpbList,
   Lone: SxpbLone,
   Many: SxpbMany,
@@ -119,6 +150,7 @@ export const SxPBTypes = {
 // eslint-disable-next-line @typescript-eslint/no-namespace
 export namespace SxPBTypes {
   export type Dict = SxpbDict;
+  export type Mesg = SxpbMesg;
   export type List = SxpbList;
   export type Lone = SxpbLone;
   export type Many = SxpbMany;

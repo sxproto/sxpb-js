@@ -14,5 +14,10 @@ describe("Distribution Build Artifact", () => {
     // Test Stringify
     const output = SxPB.stringify(data);
     expect(output).toBe('(key "value with space")');
+
+    // Test precise dict-kind preservation through the public build.
+    const dict = SxPB.parse('() (key "value")', true);
+    expect(dict).toBeInstanceOf(SxPB.Dict);
+    expect(SxPB.stringify(dict, 0)).toBe("() (key value)");
   });
 });

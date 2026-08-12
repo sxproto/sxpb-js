@@ -78,13 +78,14 @@ class ScalarListNormalizer {
   }
 }
 
-function isMessageValue(value: SxPB.Value): value is SxPB.Dict {
+function isMessageValue(value: SxPB.Value): value is SxPB.Mesg | SxPB.Dict {
+  if (value instanceof SxPB.Dict) return true;
   if (value === null || typeof value !== "object") return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
 
-function setMessageField(message: SxPB.Dict, key: string, value: SxPB.Value): void {
+function setMessageField(message: SxPB.Mesg, key: string, value: SxPB.Value): void {
   Object.defineProperty(message, key, {
     value,
     enumerable: true,
@@ -363,7 +364,7 @@ export class Parser {
     if (this.match(TokenType.LPAREN) && this.peek(1).type === TokenType.RPAREN) {
       this.consume(TokenType.LPAREN);
       this.consume(TokenType.RPAREN);
-      result = this.parseMessageBody();
+      result = new SxPB.Dict(this.parseMessageBody());
     } else if ((this.match(TokenType.LPAREN) &&
                    this.peek(1).type === TokenType.LPAREN &&
                    this.peek(2).type === TokenType.RPAREN &&
@@ -515,8 +516,8 @@ export class Parser {
     return parts.join(" "); // ALWAYS JOIN WITH SPACE
   }
 
-  private parseMessageBody(): SxPB.Dict {
-    const message: SxPB.Dict = {};
+  private parseMessageBody(): SxPB.Mesg {
+    const message: SxPB.Mesg = {};
     while (!this.match(TokenType.EOF) && !this.match(TokenType.RPAREN)) {
       if (this.isAppendOperator()) {
         this.parseAppendField(message);
@@ -544,7 +545,7 @@ export class Parser {
            this.peek(2).value === "+.";
   }
 
-  private resolveAppendTarget(message: SxPB.Dict, path: string[], operator: Token): SxPB.List | SxPB.Many {
+  private resolveAppendTarget(message: SxPB.Mesg, path: string[], operator: Token): SxPB.List | SxPB.Many {
     let current: SxPB.Value = message;
     for (const key of path) {
       if (!isMessageValue(current)) {
@@ -566,7 +567,7 @@ export class Parser {
     );
   }
 
-  private parseAppendField(message: SxPB.Dict): void {
+  private parseAppendField(message: SxPB.Mesg): void {
     this.consume(TokenType.LPAREN);
     this.consume(TokenType.LPAREN);
     const operator = this.consume(TokenType.PLAIN);
@@ -633,7 +634,7 @@ export class Parser {
     }
   }
 
-  private parseField(): SxPB.Dict {
+  private parseField(): SxPB.Mesg {
     this.consume(TokenType.LPAREN);
 
     if (this.match(TokenType.LPAREN)) {
@@ -652,7 +653,13 @@ export class Parser {
         const subkey = this.parseFieldName();
         this.consume(TokenType.RPAREN);
 
-        const value = this.parseValue();
+        let value: SxPB.Value;
+        if (this.match(TokenType.RPAREN)) {
+          // Valueless loneof header: the value is an empty message.
+          value = {};
+        } else {
+          value = this.parseValue();
+        }
         this.consume(TokenType.RPAREN);
         return { [name1]: new SxPB.Lone({ [subkey]: value }) };
       }
@@ -711,7 +718,7 @@ export class Parser {
       // Dict discriminator: `()`, followed by message-body fields.
       this.consume(TokenType.LPAREN);
       this.consume(TokenType.RPAREN);
-      return this.parseMessageBody();
+      return new SxPB.Dict(this.parseMessageBody());
     }
 
     if (this.match(TokenType.LPAREN)) {
@@ -1130,9 +1137,9 @@ function unwrap(value: SxPB.Value): SxPB.Value {
     return value.map(unwrap);
   }
   if (isMessageValue(value)) {
-    const newDict: SxPB.Dict = {};
+    const newDict: SxPB.Mesg = {};
     for (const k of Object.keys(value)) {
-      setMessageField(newDict, k, unwrap((value as SxPB.Dict)[k]));
+      setMessageField(newDict, k, unwrap(value[k]));
     }
     return newDict;
   }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import SxPBDefault, { SxPB, parse, stringify } from "../src/index.js";
+import SxPBDefault, { SxPB, SxpbDict, parse, stringify } from "../src/index.js";
 
 describe("Interface", () => {
   it("default export has all methods", () => {
@@ -9,9 +9,10 @@ describe("Interface", () => {
     expect((SxPBDefault as any).dumps).toBeUndefined();
   });
 
-  it("named SxPB export has all methods", () => {
+  it("named SxPB export has its runtime API", () => {
     expect(SxPB.parse).toBeDefined();
     expect(SxPB.stringify).toBeDefined();
+    expect(SxPB.Dict).toBe(SxpbDict);
     expect((SxPB as any).loads).toBeUndefined();
     expect((SxPB as any).dumps).toBeUndefined();
   });

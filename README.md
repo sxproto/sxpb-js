@@ -40,6 +40,18 @@ const nested = SxPB.parse('(parent (child "grandchild"))');
 // Result: { parent: { child: "grandchild" } }
 ```
 
+## Precise parsing
+
+Pass `true` as the second argument to preserve SxPB-specific runtime types instead of flattening them to native JavaScript objects and arrays:
+
+```typescript
+const data = SxPB.parse('(config () (enabled +true))', true) as SxPB.Mesg;
+console.log(data.config instanceof SxPB.Dict); // true
+console.log(SxPB.stringify(data, 0)); // (config () (enabled +true))
+```
+
+Messages remain plain objects. Dict values, which carry an explicit `()` discriminator, are instances of `SxpbDict` (also available as `SxPB.Dict`) so that parsing and serialization preserve the distinction. The exported `SxpbMesg` type describes a plain message record.
+
 ## Explicit append
 
 Use `((+. path...) (()) items...)` to append to an array or manyof that has already been declared in the containing message:

@@ -24,10 +24,11 @@ function hasBarePrefix(s: string): boolean {
   return startPattern.test(s);
 }
 
-function isDict(v: SxPB.Value): v is SxPB.Dict {
+function isMessage(v: SxPB.Value): v is SxPB.Mesg {
   return !!v &&
     typeof v === "object" &&
     !Array.isArray(v) &&
+    !(v instanceof SxPB.Dict) &&
     !(v instanceof SxPB.List) &&
     !(v instanceof SxPB.Lone) &&
     !(v instanceof SxPB.Many) &&
@@ -143,8 +144,8 @@ function serializeNestBody(nest: SxPB.Nest, indent: number, level: number): stri
   return parts.map(part => `${pad}${part}`).join("\n");
 }
 
-function isNativeNestEntry(v: SxPB.Value): v is SxPB.Dict {
-  return isDict(v) && Object.keys(v).length === 1 && Array.isArray(Object.values(v)[0]);
+function isNativeNestEntry(v: SxPB.Value): v is SxPB.Mesg {
+  return isMessage(v) && Object.keys(v).length === 1 && Array.isArray(Object.values(v)[0]);
 }
 
 function isNativeNestArray(v: SxPB.Value): v is SxPB.Value[] {
@@ -196,7 +197,7 @@ function serializeNativeNestBody(items: SxPB.Value[], indent: number, level: num
   return parts.map(part => `${pad}${part}`).join("\n");
 }
 
-function serializeMessageBody(d: SxPB.Dict, indent: number, level: number): string {
+function serializeMessageBody(d: SxPB.Mesg | SxPB.Dict, indent: number, level: number): string {
   const parts = Object.entries(d).map(([k, v]) => serializeField(k, v, indent, level));
 
   if (indent > 0) return parts.join("\n");
@@ -205,11 +206,19 @@ function serializeMessageBody(d: SxPB.Dict, indent: number, level: number): stri
 }
 
 function serializeListBody(lst: SxPB.Value[], indent: number, level: number): string {
-  const isMessageArray = lst.length > 0 && isDict(lst[0]);
+  if (lst.some(item => item instanceof SxPB.Dict)) {
+    throw new Error("Dict values cannot be list elements.");
+  }
+
+  const messageCount = lst.filter(isMessage).length;
+  if (messageCount > 0 && messageCount !== lst.length) {
+    throw new Error("List elements must be all messages or all scalars.");
+  }
+  const isMessageArray = messageCount > 0;
 
   if (isMessageArray && indent < 0) {
     const bodies = lst.map(item => {
-      const body = serializeMessageBody(item as SxPB.Dict, indent, level + 1);
+      const body = serializeMessageBody(item as SxPB.Mesg, indent, level + 1);
       return body ? `(()${body})` : "()";
     });
     return joinCondensed(bodies);
@@ -218,7 +227,7 @@ function serializeListBody(lst: SxPB.Value[], indent: number, level: number): st
   const items: string[] = [];
   for (const item of lst) {
     if (isMessageArray) {
-      const body = serializeMessageBody(item as SxPB.Dict, indent, level + 1);
+      const body = serializeMessageBody(item as SxPB.Mesg, indent, level + 1);
       if (indent > 0) {
         const pad = " ".repeat(indent * level);
         items.push(body ? `${pad}(()\n${body}\n${pad})` : `${pad}()`);
@@ -239,7 +248,7 @@ function serializeListBody(lst: SxPB.Value[], indent: number, level: number): st
   return indent > 0 ? items.join("\n") : items.join(" ");
 }
 
-function serializeAnonymousMessage(value: SxPB.Dict, indent: number, level: number): string {
+function serializeAnonymousMessage(value: SxPB.Mesg, indent: number, level: number): string {
   const pad = indent > 0 ? " ".repeat(indent * level) : "";
   const body = serializeMessageBody(value, indent, level + 1);
   if (!body) return `${pad}()`;
@@ -262,7 +271,7 @@ function manyofParts(
         if (nameFirstAnonymous && index === 0) {
           return serializeField("value", anonymousValue, indent, level + 1);
         }
-        if (isDict(anonymousValue)) {
+        if (isMessage(anonymousValue)) {
           return serializeAnonymousMessage(anonymousValue, indent, level + 1);
         }
         if (anonymousValue === null || typeof anonymousValue !== "object") {
@@ -274,7 +283,7 @@ function manyofParts(
       const [itemKey, itemValue] = entries[0];
       return serializeField(itemKey, itemValue, indent, level + 1);
     }
-    if (isDict(item)) return serializeMessageBody(item, indent, level + 1);
+    if (isMessage(item)) return serializeMessageBody(item, indent, level + 1);
     return formatAtom(item);
   });
 }
@@ -304,12 +313,7 @@ function serializeLoneofField(key: string, value: SxPB.Lone, indent: number, lev
   if (indent > 0) {
     return `${pad}((${key} ${subkey})${body})`;
   }
-  if (indent === 0) {
-    return `((${key} ${subkey})${body})`;
-  }
-
-  const keyPart = `(${joinCondensed([key, subkey])})`;
-  return `((${joinCondensed([keyPart, body])}))`;
+  return `((${key} ${subkey})${body})`;
 }
 
 function serializeFieldBody(value: SxPB.Value, indent: number, level: number): string {
@@ -332,7 +336,15 @@ function serializeFieldBody(value: SxPB.Value, indent: number, level: number): s
     return parts.length > 0 ? `(())${joinCondensed(parts)}` : "(())";
   }
 
-  if (isDict(value)) {
+  if (value instanceof SxPB.Dict) {
+    const body = serializeMessageBody(value, indent, level + 1);
+    if (!body) return " ()";
+    if (indent > 0) return ` ()\n${body}\n${pad}`;
+    const joiner = (indent === 0 || (indent < 0 && !body.startsWith("("))) ? " " : "";
+    return ` ()${joiner}${body}`;
+  }
+
+  if (isMessage(value)) {
     const body = serializeMessageBody(value, indent, level + 1);
     if (!body) return "";
     if (indent > 0) return `\n${body}\n${pad}`;
@@ -374,7 +386,15 @@ function serializeField(keyText: string, value: SxPB.Value, indent: number, leve
 }
 
 export function stringify(obj: SxPB.Value, indent: number = 1): string {
-  if (isDict(obj)) {
+  if (obj instanceof SxPB.Dict) {
+    const body = serializeMessageBody(obj, indent, 0);
+    if (!body) return "()";
+    if (indent > 0) return `()\n${body}`;
+    if (indent === 0) return `() ${body}`;
+    return `()${body}`;
+  }
+
+  if (isMessage(obj)) {
     return serializeMessageBody(obj, indent, 0);
   }
 
