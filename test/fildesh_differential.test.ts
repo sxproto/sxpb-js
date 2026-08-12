@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { parse, stringify } from "../src/index.js";
+import { acceptedAppendCases, rejectedAppendCases } from "./append_case.js";
 
 const fildeshBin = process.env.FILDESH_BIN;
 const describeWithFildesh = fildeshBin ? describe : describe.skip;
@@ -23,7 +24,10 @@ const acceptedCases = [
   "((choice) word +)",
   '(my_nest ("") +)',
   '(nest ("") +true +false +1 -.5 (01 leaf) (1word mixed) (-- one) (.. two))',
-  '(nest ("") ("+name" leaf) ("-.name" leaf))'
+  '(nest ("") ("+name" leaf) ("-.name" leaf))',
+  ...acceptedAppendCases.map(([source]) => source),
+  '("__proto__" (a (()) 1))((+. "__proto__" a) (()) 2)',
+  '(m ("constructor" ignored) (a (()) 1))((+. m a) (()) 2)'
 ];
 
 const rejectedCases = [
@@ -53,7 +57,12 @@ const rejectedCases = [
   '(nest ("") (()))',
   '(nest ("") (() (x 1)))',
   '(nest ("") (""))',
-  '(nest ("") (("" two words)))'
+  '(nest ("") (("" two words)))',
+  ...rejectedAppendCases,
+  '("__proto__" 1)("__proto__" 2)',
+  "(a (()))((+. a) (()) (()))",
+  "(a (()) ())((+. a) (()) () (()))",
+  "(a (()) 1)((+. a) (()) 2))"
 ];
 
 function runFildesh(source: string) {

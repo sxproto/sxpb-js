@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parse } from "../src/parser.js";
-import { SxpbList, SxpbLone, SxpbMany } from "../src/types.js";
+import { SxpbLone, SxpbMany } from "../src/types.js";
 
 describe("SxPB Parser", () => {
   it("parses empty message", () => {
@@ -45,10 +45,10 @@ describe("SxPB Parser", () => {
     });
   });
 
-  it("concatenates repeated list fields in precise mode", () => {
-    const result = parse("(k (()) 1 2) (k (()) 3 4)", true) as any;
-    expect(result.k).toBeInstanceOf(SxpbList);
-    expect(result.k).toEqual([1, 2, 3, 4]);
+  it("rejects repeated list fields in precise mode", () => {
+    expect(() => parse("(k (()) 1 2) (k (()) 3 4)", true)).toThrow(
+      /Duplicate field name/
+    );
   });
 
   it("parses array of messages", () => {

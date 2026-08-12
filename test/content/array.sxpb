@@ -7,9 +7,9 @@
 ; An array of strings.
 (my_strings (()) "yo" "howdy" "moin")
 
-; Additional strings appended to above.
-(my_strings (()) "ciao")
-(my_strings (()) "adios" "farewell")
+; Additional strings appended explicitly to above.
+((+. my_strings) (()) "ciao")
+((+. my_strings) (()) "adios" "farewell")
 
 ; An array of 3 messages.
 (my_messages (())

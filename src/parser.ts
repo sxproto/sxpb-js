@@ -29,15 +29,23 @@ class ScalarListNormalizer {
     return this.kind === "string";
   }
 
+  seed(value: SxPB.Value, token: Token): void {
+    if (typeof value === "string") {
+      this.kind = "string";
+    } else if (typeof value === "boolean") {
+      this.kind = "boolean";
+    } else if (typeof value === "number" || typeof value === "bigint") {
+      this.kind = "number";
+    } else {
+      throw new Error(
+        `Inconsistent existing append target element types at line ${token.line}:${token.column}`
+      );
+    }
+  }
+
   normalize(value: SxPB.Value, token: Token): SxPB.Value {
     if (this.kind === undefined) {
-      if (typeof value === "string") {
-        this.kind = "string";
-      } else if (typeof value === "boolean") {
-        this.kind = "boolean";
-      } else {
-        this.kind = "number";
-      }
+      this.seed(value, token);
     }
 
     if (this.kind === "string") {
@@ -71,9 +79,18 @@ class ScalarListNormalizer {
 }
 
 function isMessageValue(value: SxPB.Value): value is SxPB.Dict {
-  return value !== null &&
-         typeof value === "object" &&
-         value.constructor === Object;
+  if (value === null || typeof value !== "object") return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function setMessageField(message: SxPB.Dict, key: string, value: SxPB.Value): void {
+  Object.defineProperty(message, key, {
+    value,
+    enumerable: true,
+    configurable: true,
+    writable: true
+  });
 }
 
 class AnonymousListNormalizer {
@@ -84,10 +101,17 @@ class AnonymousListNormalizer {
     return this.kind === "scalar" && this.scalar.stringFirst;
   }
 
+  seed(value: SxPB.Value, token: Token): void {
+    this.kind = isMessageValue(value) ? "message" : "scalar";
+    if (this.kind === "scalar") {
+      this.scalar.seed(value, token);
+    }
+  }
+
   normalize(value: SxPB.Value, token: Token): SxPB.Value {
     const incomingKind = isMessageValue(value) ? "message" : "scalar";
     if (this.kind === undefined) {
-      this.kind = incomingKind;
+      this.seed(value, token);
     } else if (this.kind !== incomingKind) {
       throw new Error(`Incompatible anonymous manyof element at line ${token.line}:${token.column}`);
     }
@@ -335,23 +359,28 @@ export class Parser {
   }
 
   public parse(): SxPB.Value {
+    let result: SxPB.Value;
     if (this.match(TokenType.LPAREN) && this.peek(1).type === TokenType.RPAREN) {
       this.consume(TokenType.LPAREN);
       this.consume(TokenType.RPAREN);
-      return this.parseMessageBody();
-    }
-
-    if ((this.match(TokenType.LPAREN) &&
-            this.peek(1).type === TokenType.LPAREN &&
-            this.peek(2).type === TokenType.RPAREN &&
-            this.peek(3).type === TokenType.RPAREN) ||
-        this.isNestHeader()) {
-
-      return this.parseArrayBodyOrManyOfBody();
-
+      result = this.parseMessageBody();
+    } else if ((this.match(TokenType.LPAREN) &&
+                   this.peek(1).type === TokenType.LPAREN &&
+                   this.peek(2).type === TokenType.RPAREN &&
+                   this.peek(3).type === TokenType.RPAREN) ||
+               this.isNestHeader()) {
+      result = this.parseArrayBodyOrManyOfBody();
     } else {
-      return this.parseMessageBody();
+      result = this.parseMessageBody();
     }
+
+    if (!this.match(TokenType.EOF)) {
+      const token = this.peek();
+      throw new Error(
+        `Unexpected trailing token ${TokenType[token.type]} at line ${token.line}:${token.column}`
+      );
+    }
+    return result;
   }
 
   private isNestHeader(): boolean {
@@ -489,26 +518,119 @@ export class Parser {
   private parseMessageBody(): SxPB.Dict {
     const message: SxPB.Dict = {};
     while (!this.match(TokenType.EOF) && !this.match(TokenType.RPAREN)) {
+      if (this.isAppendOperator()) {
+        this.parseAppendField(message);
+        continue;
+      }
+
       const field = this.parseField();
       const key = Object.keys(field)[0];
       const val = field[key];
 
-      if (key in message) {
-        const existing = message[key];
-        const isNativeArray = Array.isArray(existing) && !(existing instanceof SxPB.List);
-
-        if (existing instanceof SxPB.List && val instanceof SxPB.List) {
-          existing.push(...val);
-        } else if (isNativeArray) {
-          (message[key] as SxPB.Value[]).push(val);
-        } else {
-          message[key] = [existing as SxPB.Value, val];
-        }
-      } else {
-        message[key] = val;
+      if (Object.prototype.hasOwnProperty.call(message, key)) {
+        throw new Error(
+          `Duplicate field name '${key}'. Use explicit append syntax for list fields.`
+        );
       }
+      setMessageField(message, key, val);
     }
     return message;
+  }
+
+  private isAppendOperator(): boolean {
+    return this.match(TokenType.LPAREN) &&
+           this.peek(1).type === TokenType.LPAREN &&
+           this.peek(2).type === TokenType.PLAIN &&
+           this.peek(2).value === "+.";
+  }
+
+  private resolveAppendTarget(message: SxPB.Dict, path: string[], operator: Token): SxPB.List | SxPB.Many {
+    let current: SxPB.Value = message;
+    for (const key of path) {
+      if (!isMessageValue(current)) {
+        throw new Error(
+          `Expected message or dict in append operation keypath at line ${operator.line}:${operator.column}`
+        );
+      }
+      if (!Object.prototype.hasOwnProperty.call(current, key)) {
+        throw new Error(`Unknown append target at line ${operator.line}:${operator.column}`);
+      }
+      current = current[key];
+    }
+
+    if (current instanceof SxPB.List || current instanceof SxPB.Many) {
+      return current;
+    }
+    throw new Error(
+      `Expected append target to be an array or manyof at line ${operator.line}:${operator.column}`
+    );
+  }
+
+  private parseAppendField(message: SxPB.Dict): void {
+    this.consume(TokenType.LPAREN);
+    this.consume(TokenType.LPAREN);
+    const operator = this.consume(TokenType.PLAIN);
+
+    const path: string[] = [];
+    while (!this.match(TokenType.RPAREN) && !this.match(TokenType.EOF)) {
+      const name = this.parseFieldName();
+      if (name.length === 0) {
+        throw new Error(
+          `Expected a nonempty field name in the append keypath at line ${operator.line}:${operator.column}`
+        );
+      }
+      path.push(name);
+    }
+    if (path.length === 0) {
+      throw new Error(
+        `Expected a field name in the append keypath at line ${operator.line}:${operator.column}`
+      );
+    }
+    this.consume(TokenType.RPAREN);
+
+    const target = this.resolveAppendTarget(message, path, operator);
+    if (!(this.match(TokenType.LPAREN) &&
+          this.peek(1).type === TokenType.LPAREN &&
+          this.peek(2).type === TokenType.RPAREN &&
+          this.peek(3).type === TokenType.RPAREN)) {
+      const token = this.peek();
+      throw new Error(
+        `Expected (()) discriminator before append elements at line ${token.line}:${token.column}`
+      );
+    }
+    this.consumeHeader();
+
+    let staged: SxPB.Value[];
+    if (target instanceof SxPB.Many) {
+      const normalizer = new AnonymousListNormalizer();
+      for (let i = target.value.length - 1; i >= 0; i--) {
+        const element = target.value[i];
+        if (!(element instanceof SxPB.Lone)) continue;
+        const entries = Object.entries(element.value);
+        if (entries.length === 1 && entries[0][0] === "") {
+          normalizer.seed(entries[0][1], operator);
+          break;
+        }
+      }
+      staged = this.parseManyOfBodyItems(normalizer).value;
+    } else {
+      const seed = target.length > 0 ? target[0] : undefined;
+      const parsed = this.parseArrayBody(seed, false);
+      if (!(parsed instanceof SxPB.List)) {
+        throw new Error(
+          `Expected append elements for an array at line ${operator.line}:${operator.column}`
+        );
+      }
+      staged = parsed;
+    }
+
+    // Validate the complete operation, including its closing delimiter, before
+    // mutating the already-parsed target collection.
+    this.consume(TokenType.RPAREN);
+    const destination = target instanceof SxPB.Many ? target.value : target;
+    for (const item of staged) {
+      destination.push(item);
+    }
   }
 
   private parseField(): SxPB.Dict {
@@ -599,9 +721,10 @@ export class Parser {
     return this.parseScalar();
   }
 
-  private parseManyOfBodyItems(): SxPB.Many {
+  private parseManyOfBodyItems(
+    normalizer: AnonymousListNormalizer = new AnonymousListNormalizer()
+  ): SxPB.Many {
     const items: SxPB.Value[] = [];
-    const normalizer = new AnonymousListNormalizer();
 
     while (!this.match(TokenType.RPAREN) && !this.match(TokenType.EOF)) {
       const token = this.peek();
@@ -616,6 +739,11 @@ export class Parser {
 
         if (this.peek(1).type === TokenType.LPAREN &&
             this.peek(2).type === TokenType.RPAREN) {
+          if (this.peek(3).type === TokenType.RPAREN) {
+            throw new Error(
+              `Unexpected list discriminator as manyof element at line ${token.line}:${token.column}`
+            );
+          }
           this.consume(TokenType.LPAREN);
           this.consume(TokenType.LPAREN);
           this.consume(TokenType.RPAREN);
@@ -626,6 +754,11 @@ export class Parser {
         }
 
         if (this.peek(1).type === TokenType.STRING && this.peek(1).value === "") {
+          if (this.peek(2).type === TokenType.RPAREN) {
+            throw new Error(
+              `Unexpected nest discriminator as manyof element at line ${token.line}:${token.column}`
+            );
+          }
           this.consume(TokenType.LPAREN);
           this.consume(TokenType.STRING);
           const value = this.parseAnonymousDiscriminatedStringBody();
@@ -759,8 +892,12 @@ export class Parser {
     }
   }
 
-  private parseArrayBody(): SxPB.List | SxPB.Nest {
-    if (this.match(TokenType.LPAREN) &&
+  private parseArrayBody(
+    seedValue?: SxPB.Value,
+    allowLeadingHeader: boolean = true
+  ): SxPB.List | SxPB.Nest {
+    if (allowLeadingHeader &&
+        this.match(TokenType.LPAREN) &&
         this.peek(1).type === TokenType.LPAREN &&
         this.peek(2).type === TokenType.RPAREN &&
         this.peek(3).type === TokenType.RPAREN) {
@@ -771,6 +908,15 @@ export class Parser {
     const scalarNormalizer = new ScalarListNormalizer();
     let arrayKind: "scalar" | "message" | undefined;
     let isNest = false;
+
+    if (seedValue !== undefined) {
+      if (isMessageValue(seedValue)) {
+        arrayKind = "message";
+      } else {
+        arrayKind = "scalar";
+        scalarNormalizer.seed(seedValue, this.peek());
+      }
+    }
 
     // Parse items individually
     while(!this.match(TokenType.RPAREN) && !this.match(TokenType.EOF)) {
@@ -788,6 +934,17 @@ export class Parser {
       if (t.type === TokenType.LPAREN) {
         // Could be empty message `()` or anonymous discriminated message `(() ...)` or `anonymous discriminated string` `("" ...)`
         // OR generic list if isNest is true.
+
+        if (this.peek(1).type === TokenType.LPAREN &&
+            this.peek(2).type === TokenType.RPAREN &&
+            this.peek(3).type === TokenType.RPAREN) {
+          if (isNest) {
+            throw new Error("Nest can only hold nests and strings.");
+          }
+          throw new Error(
+            `Unexpected list discriminator as array element at line ${t.line}:${t.column}`
+          );
+        }
 
         if (this.peek(1).type === TokenType.RPAREN) {
           if (isNest) {
@@ -972,10 +1129,10 @@ function unwrap(value: SxPB.Value): SxPB.Value {
   if (Array.isArray(value)) {
     return value.map(unwrap);
   }
-  if (value && typeof value === "object" && value.constructor === Object) {
+  if (isMessageValue(value)) {
     const newDict: SxPB.Dict = {};
-    for (const k in value) {
-      newDict[k] = unwrap((value as SxPB.Dict)[k]);
+    for (const k of Object.keys(value)) {
+      setMessageField(newDict, k, unwrap((value as SxPB.Dict)[k]));
     }
     return newDict;
   }
