@@ -66,11 +66,12 @@ describe("SxPB Python Compatibility Tests", () => {
     expect(parse('(key "" 1 "b")')).toEqual({ key: "1b" });
   });
 
-  it("handles array type promotion", () => {
+  it("uses the first array element to establish its scalar kind", () => {
     expect(parse("(a (()) 1 2 3)")).toEqual({ a: [1, 2, 3] });
     expect(parse("(a (()) +true +false)")).toEqual({ a: [true, false] });
-    expect(parse('(a (()) 1 "2")')).toEqual({ a: ["1", "2"] });
-    expect(parse('(a (()) +true "false")')).toEqual({ a: ["+true", "false"] });
-    expect(parse("(a (()) 1 bare)")).toEqual({ a: ["1", "bare"] });
+    expect(parse('(a (()) "1" 2)')).toEqual({ a: ["1", "2"] });
+    expect(() => parse('(a (()) 1 "2")')).toThrow();
+    expect(() => parse('(a (()) +true "false")')).toThrow();
+    expect(() => parse("(a (()) 1 bare)")).toThrow();
   });
 });

@@ -19,6 +19,58 @@ interface Token {
   column: number;
 }
 
+type ScalarListKind = "string" | "number" | "boolean";
+
+class ScalarListNormalizer {
+  private kind?: ScalarListKind;
+
+  normalize(value: SxPB.Value, token: Token): SxPB.Value {
+    if (this.kind === undefined) {
+      if (typeof value === "string") {
+        this.kind = "string";
+      } else if (typeof value === "boolean") {
+        this.kind = "boolean";
+      } else {
+        this.kind = "number";
+      }
+    }
+
+    if (this.kind === "string") {
+      if (token.type === TokenType.NUMBER || token.type === TokenType.BOOLEAN) {
+        return token.text ?? String(token.value);
+      }
+      if (typeof value === "string") {
+        return value;
+      }
+      throw new Error(`Unexpected literal type at line ${token.line}:${token.column}`);
+    }
+
+    if (this.kind === "number") {
+      if (typeof value === "number" || typeof value === "bigint") {
+        return value;
+      }
+      throw new Error(`Unexpected literal type at line ${token.line}:${token.column}`);
+    }
+
+    if (typeof value === "boolean") {
+      return value;
+    }
+    if ((typeof value === "number" || typeof value === "bigint") &&
+        token.text !== undefined &&
+        /^\+?\d+$/.test(token.text) &&
+        (value === 0 || value === 1 || value === 0n || value === 1n)) {
+      return value === 1 || value === 1n;
+    }
+    throw new Error(`Expected a bool, not another literal at line ${token.line}:${token.column}`);
+  }
+}
+
+function isMessageValue(value: SxPB.Value): value is SxPB.Dict {
+  return value !== null &&
+         typeof value === "object" &&
+         value.constructor === Object;
+}
+
 class Lexer {
   private input: string;
   private pos: number = 0;
@@ -313,7 +365,8 @@ export class Parser {
   }
 
   private parseArrayBodyOrManyOfBody(): SxPB.List | SxPB.Many | SxPB.Nest {
-    if (this.peek(4).type === TokenType.EOF) {
+    if (this.peek(4).type === TokenType.EOF ||
+        this.peek(4).type === TokenType.RPAREN) {
       this.consumeHeader();
       return new SxPB.List([]);
     }
@@ -639,7 +692,9 @@ export class Parser {
       this.consumeHeader();
     }
 
-    let items: SxPB.Value[] = [];
+    const items: SxPB.Value[] = [];
+    const scalarNormalizer = new ScalarListNormalizer();
+    let arrayKind: "scalar" | "message" | undefined;
     let isNest = false;
 
     // Parse items individually
@@ -747,33 +802,29 @@ export class Parser {
       }
 
       if (item !== undefined) {
-        items.push(item);
+        if (isNest) {
+          items.push(item);
+          continue;
+        }
+
+        if (isMessageValue(item)) {
+          if (arrayKind === "scalar") {
+            throw new Error(`Unexpected message array element at line ${t.line}:${t.column}`);
+          }
+          arrayKind = "message";
+          items.push(item);
+        } else {
+          if (arrayKind === "message") {
+            throw new Error(`Unexpected literal type at line ${t.line}:${t.column}`);
+          }
+          arrayKind = "scalar";
+          items.push(scalarNormalizer.normalize(item, t));
+        }
       }
     }
 
     if (isNest) {
       return this.listToNest(items);
-    }
-
-    // Post-processing to enforce homogeneity and string conversion
-    // 1. If any item is a String (or BARE which is treated as string here), or anonymous discriminated string result
-    //    Convert all scalars (Number, Boolean) to String.
-    // 2. If all are Number -> ok.
-    // 3. If all are Boolean -> ok.
-    // 4. If all are Message (Objects) -> ok.
-    // Mixed Message and Scalar is invalid (grammar separates them).
-    // The parser is lenient here and allows them to coexist.
-
-    // Check if we have any strings
-    const hasString = items.some(i => typeof i === "string");
-
-    if (hasString) {
-      // Promote all scalars to string
-      items = items.map(i => {
-        if (typeof i === "number") return String(i);
-        if (typeof i === "boolean") return i ? "+true" : "+false";
-        return i;
-      });
     }
 
     return new SxPB.List(items);
