@@ -13,6 +13,7 @@
     "build": "tsc",
     "lint": "eslint .",
     "tidy": "eslint . --fix",
+    "tidytest": "npm run tidy && npm run lint && npm run build && npm test",
     "prepare": "npm run build"
   },
   "repository": {
