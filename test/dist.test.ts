@@ -19,5 +19,8 @@ describe("Distribution Build Artifact", () => {
     const dict = SxPB.parse('() (key "value")', true);
     expect(dict).toBeInstanceOf(SxPB.Dict);
     expect(SxPB.stringify(dict, 0)).toBe("() (key value)");
+
+    // U+FEFF is not whitespace in the compiled parser.
+    expect(() => SxPB.parse("\uFEFF(key value)")).toThrow();
   });
 });

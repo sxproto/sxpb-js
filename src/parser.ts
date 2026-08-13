@@ -153,7 +153,10 @@ class Lexer {
   }
 
   private isWhitespace(char: string): boolean {
-    return /\s/.test(char);
+    // U+FEFF is content, not SxPB whitespace. Callers that support a UTF-8
+    // BOM must remove it while decoding instead of having the parser silently
+    // discard an already-decoded character.
+    return char !== "\uFEFF" && /\s/.test(char);
   }
 
   private skipWhitespaceAndComments() {
