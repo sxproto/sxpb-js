@@ -247,40 +247,47 @@ class Lexer {
       this.pos += 3; this.col += 3;
       let val = "";
       while (this.pos < this.input.length && !this.input.startsWith('"""', this.pos)) {
-        val += this.advance();
+        const c = this.peek();
+        if (c === "\r") {
+          // Raw carriage returns are ignored inside quoted strings.
+          this.advance();
+        } else if (c === "\\") {
+          this.advance();
+          val += this.decodeEscape();
+        } else {
+          val += this.advance();
+        }
       }
-      if (this.input.startsWith('"""', this.pos)) {
-        this.pos += 3; this.col += 3;
+      if (!this.input.startsWith('"""', this.pos)) {
+        throw new Error(
+          `Unterminated multiline string at line ${startLine}:${startCol}`
+        );
       }
-
-      if (val.startsWith("\\\n")) {
-        val = val.substring(2);
-      } else if (val.startsWith("\n")) {
-        val = val.substring(1);
-      }
-
-      val = this.dedent(val);
-      val = val.replace(/\\"/g, '"');
+      this.pos += 3; this.col += 3;
       return { type: TokenType.STRING, value: val, line: startLine, column: startCol };
     }
 
     this.advance(); // consume "
     let val = "";
-    while (this.pos < this.input.length) {
+    while (true) {
       const c = this.peek();
+      if (c === "") {
+        throw new Error(
+          `Unterminated quoted string at line ${startLine}:${startCol}`
+        );
+      }
       if (c === '"') {
         this.advance();
         break;
       }
+      if (c === "\r") {
+        // Raw carriage returns are ignored inside quoted strings.
+        this.advance();
+        continue;
+      }
       if (c === "\\") {
         this.advance();
-        const escaped = this.advance();
-        if (escaped === "n") val += "\n";
-        else if (escaped === "r") val += "\r";
-        else if (escaped === "t") val += "\t";
-        else if (escaped === '"') val += '"';
-        else if (escaped === "\\") val += "\\";
-        else val += escaped;
+        val += this.decodeEscape();
       } else {
         val += this.advance();
       }
@@ -288,22 +295,26 @@ class Lexer {
     return { type: TokenType.STRING, value: val, line: startLine, column: startCol };
   }
 
-  private dedent(text: string): string {
-    const lines = text.split("\n");
-    let minIndent = Infinity;
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].trim().length === 0) continue;
-      const match = lines[i].match(/^ */);
-      const indent = match ? match[0].length : 0;
-      if (indent < minIndent) minIndent = indent;
+  // Decode one escape sequence after a backslash (already consumed).
+  // Mirrors Fildesh's basic escape set: \", \\, \t, \n, \v, \f, \r, and
+  // backslash-newline continuation. Anything else is rejected.
+  private decodeEscape(): string {
+    const escaped = this.advance();
+    if (escaped === '"') return '"';
+    if (escaped === "\\") return "\\";
+    if (escaped === "t") return "\t";
+    if (escaped === "n") return "\n";
+    if (escaped === "v") return "\v";
+    if (escaped === "f") return "\f";
+    if (escaped === "r") return "\r";
+    if (escaped === "\n") return ""; // line continuation
+    if (escaped === "\r" && this.peek() === "\n") {
+      this.advance();
+      return ""; // CRLF continuation
     }
-
-    if (minIndent === Infinity) return text;
-
-    return lines.map(line => {
-      if (line.trim().length === 0) return line;
-      return line.startsWith(" ".repeat(minIndent)) ? line.substring(minIndent) : line;
-    }).join("\n");
+    throw new Error(
+      `Unknown escape sequence \\${escaped} at line ${this.line}:${this.col}`
+    );
   }
 
   private readAtom(): string {
@@ -418,7 +429,11 @@ export class Parser {
 
   private parseArrayBodyOrManyOfBody(): SxPB.List | SxPB.Many | SxPB.Nest {
     if (this.isNestHeader()) {
-      return this.parseArrayBody();
+      // Consume the `("")` nest discriminator; the body is a nest.
+      this.consume(TokenType.LPAREN);
+      this.consume(TokenType.STRING);
+      this.consume(TokenType.RPAREN);
+      return this.parseArrayBody(undefined, true);
     }
 
     this.consumeHeader();
@@ -494,6 +509,7 @@ export class Parser {
 
   private parseAnonymousDiscriminatedStringBody(): string {
     const parts: string[] = [];
+    let prevWasUnquoted = false;
 
     while (
       this.match(TokenType.STRING) ||
@@ -503,6 +519,14 @@ export class Parser {
       this.match(TokenType.BOOLEAN)
     ) {
       const t = this.consume();
+      const isUnquoted = this.isUnquoted(t);
+
+      // Only insert a space if BOTH the previous and current segments are
+      // unquoted (quoted segments join without a space).
+      if (parts.length > 0 && prevWasUnquoted && isUnquoted) {
+        parts.push(" ");
+      }
+
       let valStr: string;
       if (t.type === TokenType.STRING) {
         valStr = String(t.value);
@@ -514,9 +538,10 @@ export class Parser {
         valStr = String(t.value);
       }
       parts.push(valStr);
+      prevWasUnquoted = isUnquoted;
     }
 
-    return parts.join(" "); // ALWAYS JOIN WITH SPACE
+    return parts.join("");
   }
 
   private parseMessageBody(): SxPB.Mesg {
@@ -828,6 +853,11 @@ export class Parser {
             this.consume(TokenType.RPAREN);
             if (items.length === 0) {
               // `(("") ...)` is an anonymous nested nest.
+              if (this.peek().type === TokenType.RPAREN) {
+                throw new Error(
+                  `Empty anonymous subnests must use the ("" ("") ...) form at line ${t.line}:${t.column}`
+                );
+              }
               items.push("");
             } else if (items.length === 1 && !hasExplicitNestDiscriminator) {
               // `(key ("") ...)` explicitly discriminates the named subnest.
@@ -903,12 +933,13 @@ export class Parser {
   }
 
   private parseArrayBody(
-    seedValue?: SxPB.Value
+    seedValue?: SxPB.Value,
+    nestMode = false
   ): SxPB.List | SxPB.Nest {
     const items: SxPB.Value[] = [];
     const scalarNormalizer = new ScalarListNormalizer();
     let arrayKind: "scalar" | "message" | undefined;
-    let isNest = false;
+    const isNest = nestMode;
 
     if (seedValue !== undefined) {
       if (isMessageValue(seedValue)) {
@@ -923,14 +954,9 @@ export class Parser {
     while(!this.match(TokenType.RPAREN) && !this.match(TokenType.EOF)) {
       const t = this.peek();
       let item: SxPB.Value | undefined;
-      let fromDiscriminatedEmptyString = false;
 
-      // Special handling for Nest items: they can be generic lists `( ... )`.
-      // But standard array body items must be `(() ...)` or `()`.
-      // If we are in a Nest (`isNest` is true), we allow generic lists.
-      // `isNest` is set AFTER detecting `("")` (which happens in the loop for first item).
-      //
-      // Also, detecting `("")` happens via `LPAREN, STRING(""), ...`.
+      // Nests may contain generic lists. Standard array items use `(() ...)`
+      // for messages or `()` for an empty message.
 
       if (t.type === TokenType.LPAREN) {
         // Could be empty message `()` or anonymous discriminated message `(() ...)` or `anonymous discriminated string` `("" ...)`
@@ -971,34 +997,22 @@ export class Parser {
             if (isNest) {
               throw new Error("Nest can only hold nests and strings.");
             }
-            // `("")` -> Empty Anonymous Nest (List) OR Nest Marker (Empty String)
-            this.consume(TokenType.LPAREN);
-            this.consume(TokenType.STRING);
-            this.consume(TokenType.RPAREN);
-
-            if (items.length === 0) {
-              // If it's the first item, it's the Nest Marker `""`
-              item = "";
-              fromDiscriminatedEmptyString = true;
-            } else {
-              // Otherwise it's an empty nest
-              item = new SxPB.List([]);
-            }
+            // `("")` is not a valid array item: anonymous discriminated
+            // strings require at least one content segment.
+            throw new Error(
+              `Unexpected empty anonymous string as array element at line ${t.line}:${t.column}`
+            );
           } else if (this.isPureAnonymousString(2)) {
             // `("" ...)` -> anonymous discriminated string
             // Structure: LPAREN, STRING(""), (ESCAPED_STRING | MULTILINE_STRING | PLAIN)+, RPAREN
             this.consume(TokenType.LPAREN);
             this.consume(TokenType.STRING); // Consume ""
 
-            // Special handling for anonymous discriminated string body (always space separated)
+            // Quoted segments concatenate; adjacent unquoted segments use a space.
             const strBody = this.parseAnonymousDiscriminatedStringBody();
 
             this.consume(TokenType.RPAREN);
             item = strBody;
-
-            if (strBody === "") {
-              fromDiscriminatedEmptyString = true;
-            }
           } else if (isNest) {
             // Treat as generic list
             item = this.parseGenericList();
@@ -1043,13 +1057,6 @@ export class Parser {
         item = String(this.consume().value);
       } else {
         throw new Error(`Invalid array body item type: ${TokenType[t.type]}`);
-      }
-
-      // Check for Nest marker
-      if (items.length === 0 && fromDiscriminatedEmptyString) {
-        isNest = true;
-        // Do NOT add the marker to items
-        continue;
       }
 
       if (item !== undefined) {

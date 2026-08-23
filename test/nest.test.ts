@@ -154,3 +154,17 @@ test("toplevel nest", () => {
   const loaded = SxPB.parse(serialized, true);
   expect(loaded).toEqual(data);
 });
+
+test("empty anonymous subnest requires the (\"\" (\"\") ...) form", () => {
+  expect(() => SxPB.parse('(n ("") (("")))', true)).toThrow(
+    "must use the (\"\" (\"\") ...) form"
+  );
+  expect(() => SxPB.parse('(n ("") (("") ))', true)).toThrow(
+    "must use the (\"\" (\"\") ...) form"
+  );
+  // The prefixed empty form and the non-empty wrapped form stay legal.
+  const prefixed = SxPB.parse('(n ("") ("" ("") ))', true);
+  expect(JSON.stringify(prefixed)).toBe('{"n":[{"":[]}]}');
+  const wrapped = SxPB.parse('(n ("") (("") x))', true);
+  expect(JSON.stringify(wrapped)).toBe('{"n":[{"":["x"]}]}');
+});

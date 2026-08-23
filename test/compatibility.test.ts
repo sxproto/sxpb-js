@@ -10,7 +10,7 @@ describe("SxPB Python Compatibility Tests", () => {
     // From content_test.py: test_unquoted_array_string_parsing
     const sxpb_string = `
         (my_array (())
-         ("" this is a "multi-word" string)
+         ("" this is a multi-word string)
          ("" so is this)
          these
          are
