@@ -81,6 +81,29 @@ describe("SxPB Serializer", () => {
     expect(o).toEqual(obj);
   });
 
+  it.each([-1, 0, 2])("preserves string whitespace with indent %i", (indent) => {
+    const strings = {
+      final_lf: "a\n",
+      leading_space: " a",
+      trailing_space: "a ",
+      repeated_spaces: "a  b",
+      control_whitespace: "a\tb\nc\vd\fe\rf"
+    };
+    const obj = { ...strings, array: Object.values(strings) };
+    const printed = stringify(obj, indent);
+    expect(parse(printed)).toEqual(obj);
+    expect(stringify(parse(printed), indent)).toBe(printed);
+  });
+
+  it("quotes SxPB escapes without changing literal escape text", () => {
+    const value = '"\\\t\n\v\f\r literal \\u000b';
+    const quoted = String.raw`"\"\\\t\n\v\f\r literal \\u000b"`;
+    const obj = { [value]: value, array: [value] };
+    const printed = stringify(obj, 0);
+    expect(printed).toBe(`(${quoted} ${quoted}) (array (()) ${quoted})`);
+    expect(parse(printed)).toEqual(obj);
+  });
+
   it("serializes canonical string atoms", () => {
     const obj = {
       strings: ["1", "two words", "bare"],

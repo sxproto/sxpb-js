@@ -35,6 +35,21 @@ function isMessage(v: SxPB.Value): v is SxPB.Mesg {
     !(v instanceof SxPB.Nest);
 }
 
+const STRING_ESCAPES: Record<string, string> = {
+  '"': '\\"',
+  "\\": "\\\\",
+  "\t": "\\t",
+  "\n": "\\n",
+  "\v": "\\v",
+  "\f": "\\f",
+  "\r": "\\r"
+};
+
+function quoteString(value: string): string {
+  const escaped = value.replace(/["\\\t\n\v\f\r]/g, character => STRING_ESCAPES[character]);
+  return `"${escaped}"`;
+}
+
 function formatAtom(v: SxPB.Value): string {
   if (typeof v === "boolean") {
     return v ? "+true" : "+false";
@@ -47,7 +62,7 @@ function formatAtom(v: SxPB.Value): string {
     if (isPlainString(v) && hasBarePrefix(v)) {
       return v;
     }
-    return JSON.stringify(v);
+    return quoteString(v);
   }
   throw new Error(`Unsupported atom type: ${typeof v}`);
 }
